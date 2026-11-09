@@ -95,8 +95,7 @@ use these repository secrets:
 | `ANDROIDKVM_KEY_PASSWORD` | Key password |
 
 Keep the release keystore safe. Android updates require APKs signed with the
-same key. The GitHub repository is private; downloading a release requires access
-to it.
+same key. Releases are published from this public GitHub repository.
 
 ## Protocol references
 
