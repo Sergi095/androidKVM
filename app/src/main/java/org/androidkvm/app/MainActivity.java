@@ -78,6 +78,7 @@ public final class MainActivity extends Activity {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ExecutorService mouseIo = Executors.newSingleThreadExecutor();
     private final ExecutorService updatesIo = Executors.newSingleThreadExecutor();
+    private final ExecutorService wolIo = Executors.newSingleThreadExecutor();
     private final StringBuilder pendingText = new StringBuilder();
     private final Runnable textFlush = this::flushTextNow;
     private final AtomicReference<PointF> pendingMove = new AtomicReference<>();
@@ -152,6 +153,7 @@ public final class MainActivity extends Activity {
         io.shutdownNow();
         mouseIo.shutdownNow();
         updatesIo.shutdownNow();
+        wolIo.shutdownNow();
         super.onDestroy();
     }
 
@@ -642,7 +644,8 @@ public final class MainActivity extends Activity {
             address.setSingleLine(true);
             address.setEllipsize(android.text.TextUtils.TruncateAt.END);
             detail.addView(address);
-            detail.addView(text(profile.user + "  ·  Saved connection", 12, MUTED));
+            detail.addView(text(profile.user + (profile.wolMac.isEmpty()
+                    ? "  ·  Saved connection" : "  ·  Wake-on-LAN ready"), 12, MUTED));
             content.addView(detail, new LinearLayout.LayoutParams(0, -2, 1));
             item.addView(content);
             LinearLayout actions = row();
@@ -674,11 +677,101 @@ public final class MainActivity extends Activity {
                         }
                     }).show());
             item.addView(actions, spaced());
+            if (profile.wolMac.isEmpty()) {
+                Button setupWol = button("Set up Wake-on-LAN", SURFACE, TEXT);
+                setupWol.setOnClickListener(view -> showWakeOnLanDialog(profile));
+                item.addView(setupWol, spaced());
+            } else {
+                LinearLayout wakeActions = row();
+                Button wake = button("Wake PC", SURFACE, KEY_ACCENT);
+                wake.setContentDescription("Wake computer for " + profile.address);
+                wake.setOnClickListener(view -> sendWakeOnLan(profile, wake));
+                wakeActions.addView(wake, new LinearLayout.LayoutParams(0, dp(44), 1));
+                Button wolSettings = button("WOL settings", SURFACE, MUTED);
+                wolSettings.setTextSize(12);
+                wolSettings.setOnClickListener(view -> showWakeOnLanDialog(profile));
+                LinearLayout.LayoutParams settingsSize = new LinearLayout.LayoutParams(dp(120), dp(44));
+                settingsSize.leftMargin = dp(8);
+                wakeActions.addView(wolSettings, settingsSize);
+                item.addView(wakeActions, spaced());
+            }
             savedPanel.addView(item, spaced());
         }
         if (loginPanel != null) loginPanel.setVisibility(profiles.isEmpty() ? View.VISIBLE : View.GONE);
         if (addKvmButton != null) addKvmButton.setVisibility(profiles.isEmpty() ? View.GONE : View.VISIBLE);
         if (closeFormButton != null) closeFormButton.setVisibility(profiles.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void showWakeOnLanDialog(ProfileStore.Profile profile) {
+        LinearLayout form = column();
+        form.setPadding(dp(20), dp(8), dp(20), 0);
+        form.addView(text("Use the computer's network MAC address, not the KVM's. "
+                + "The destination must be reachable from this phone.", 13, MUTED));
+        EditText mac = field("Computer MAC, e.g. AA:BB:CC:DD:EE:FF", false);
+        mac.setText(profile.wolMac);
+        form.addView(mac, spaced());
+        EditText destination = field("Broadcast IP or hostname", false);
+        destination.setText(profile.wolDestination.isEmpty()
+                ? "255.255.255.255" : profile.wolDestination);
+        form.addView(destination, spaced());
+        EditText port = field("UDP port", false);
+        port.setInputType(InputType.TYPE_CLASS_NUMBER);
+        port.setText(String.valueOf(profile.wolPort));
+        form.addView(port, spaced());
+        form.addView(text("Default destination 255.255.255.255 works on the same LAN. "
+                + "For a VPN, use a reachable directed broadcast or WOL relay.", 12, MUTED), spaced());
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Wake-on-LAN · " + profile.address)
+                .setView(form)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", null);
+        if (!profile.wolMac.isEmpty()) {
+            builder.setNeutralButton("Disable", (dialog, which) -> {
+                try {
+                    profileStore.setWakeOnLan(profile.id, "", "255.255.255.255", 9);
+                    renderSavedProfiles();
+                } catch (Exception error) {
+                    Toast.makeText(this, "Could not remove WOL settings.", Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    try {
+                        String normalizedMac = WakeOnLan.canonicalMac(mac.getText().toString());
+                        String target = WakeOnLan.destination(destination.getText().toString());
+                        int udpPort = WakeOnLan.port(port.getText().toString());
+                        profileStore.setWakeOnLan(profile.id, normalizedMac, target, udpPort);
+                        renderSavedProfiles();
+                        dialog.dismiss();
+                    } catch (IllegalArgumentException error) {
+                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    } catch (Exception error) {
+                        Toast.makeText(this, "Could not save WOL settings.", Toast.LENGTH_LONG).show();
+                    }
+                }));
+        dialog.show();
+    }
+
+    private void sendWakeOnLan(ProfileStore.Profile profile, Button wakeButton) {
+        wakeButton.setEnabled(false);
+        wolIo.execute(() -> {
+            try {
+                WakeOnLan.send(profile.wolMac, profile.wolDestination, profile.wolPort);
+                runOnUiThread(() -> {
+                    wakeButton.setEnabled(true);
+                    Toast.makeText(this, "Magic packet sent to " + profile.wolDestination
+                            + ":" + profile.wolPort + ".", Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    wakeButton.setEnabled(true);
+                    Toast.makeText(this, "Wake-on-LAN failed: " + error.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+        });
     }
 
     private void connectSavedProfile(ProfileStore.Profile profile) {

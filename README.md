@@ -28,6 +28,10 @@ Your phone's keyboard may look different.
 
 <img src="docs/screenshots/updates.png" alt="Updates tab offering version 0.1.5 from GitHub Releases" width="280">
 
+| Wake button on a saved KVM | Per-KVM WOL settings |
+| --- | --- |
+| <img src="docs/screenshots/wol-card.png" alt="Saved KVM card with Wake PC and WOL settings buttons" width="280"> | <img src="docs/screenshots/wol-settings.png" alt="WOL settings asking for the computer MAC, destination, and UDP port" width="280"> |
+
 ## Quick start
 
 1. Install the signed release APK from this repository's Releases page.
@@ -69,6 +73,8 @@ signing key and cannot update a release installation.
   two-finger tap for right click, and two-finger vertical swipe to scroll.
   The mouse control button can switch between direct touch and relative trackpad mode.
 - See the reported ATX power LED state and send On or soft Off when ATX control is available.
+- Configure Wake-on-LAN separately for each saved KVM, then tap **Wake PC** on
+  its card to send a magic packet without opening the console.
 - Use a Termux-style extra-key bar with Escape, Tab, Ctrl, Alt, arrows,
   Home, End, Page Up, Page Down, and a swipeable F1–F12 row. It sits directly
   above the Android keyboard and hides with it. Tap a modifier first for a shortcut.
@@ -113,6 +119,19 @@ media are outside this initial app.
 Power buttons follow the KVM's reported ATX LED state. If the screen is live
 but the app reports the power LED as off, check the KVM or bridge's ATX sensing
 before relying on those buttons.
+
+### Wake-on-LAN
+
+On a saved KVM card, tap **Set up Wake-on-LAN**. Enter the **computer's wired
+network MAC address** (not the PiKVM or NanoKVM MAC), a broadcast destination,
+and a UDP port. The defaults are `255.255.255.255` and port `9` for a phone on
+the same LAN. After saving, tap **Wake PC**; the app reports when it sent the
+packet, but cannot confirm that the computer woke. Use **WOL settings** to edit
+or disable it. These settings stay attached to the saved KVM when you reconnect.
+
+Wake-on-LAN must be enabled in the computer's firmware and network adapter. If
+the phone connects through a VPN or another subnet, use a reachable directed
+broadcast address or a WOL relay; routers may block broadcast packets.
 
 ## GitHub Actions releases
 

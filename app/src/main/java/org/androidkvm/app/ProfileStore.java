@@ -25,20 +25,27 @@ import javax.crypto.spec.GCMParameterSpec;
 /** Saved KVMs. Only encrypted passwords are written to app preferences. */
 final class ProfileStore {
     static final class Profile {
-        final String id, address, user, pin, iv, encryptedPassword;
+        final String id, address, user, pin, iv, encryptedPassword, wolMac, wolDestination;
+        final int wolPort;
 
-        Profile(String id, String address, String user, String pin, String iv, String encryptedPassword) {
+        Profile(String id, String address, String user, String pin, String iv, String encryptedPassword,
+                String wolMac, String wolDestination, int wolPort) {
             this.id = id;
             this.address = address;
             this.user = user;
             this.pin = pin;
             this.iv = iv;
             this.encryptedPassword = encryptedPassword;
+            this.wolMac = wolMac;
+            this.wolDestination = wolDestination;
+            this.wolPort = wolPort;
         }
 
         JSONObject toJson() throws JSONException {
             return new JSONObject().put("id", id).put("address", address).put("user", user)
-                    .put("pin", pin).put("iv", iv).put("password", encryptedPassword);
+                    .put("pin", pin).put("iv", iv).put("password", encryptedPassword)
+                    .put("wolMac", wolMac).put("wolDestination", wolDestination)
+                    .put("wolPort", wolPort);
         }
     }
 
@@ -57,7 +64,8 @@ final class ProfileStore {
                 JSONObject item = data.getJSONObject(n);
                 profiles.add(new Profile(item.getString("id"), item.getString("address"),
                         item.getString("user"), item.optString("pin"), item.getString("iv"),
-                        item.getString("password")));
+                        item.getString("password"), item.optString("wolMac"),
+                        item.optString("wolDestination", "255.255.255.255"), item.optInt("wolPort", 9)));
             }
         } catch (JSONException ignored) {
             // Invalid saved data is never used as a credential.
@@ -68,10 +76,15 @@ final class ProfileStore {
     synchronized void save(String address, String user, String pin, String password) throws Exception {
         List<Profile> profiles = list();
         String id = UUID.randomUUID().toString();
+        String wolMac = "", wolDestination = "255.255.255.255";
+        int wolPort = 9;
         for (int n = 0; n < profiles.size(); n++) {
             Profile existing = profiles.get(n);
             if (existing.address.equals(address) && existing.user.equals(user)) {
                 id = existing.id;
+                wolMac = existing.wolMac;
+                wolDestination = existing.wolDestination;
+                wolPort = existing.wolPort;
                 profiles.remove(n);
                 break;
             }
@@ -82,8 +95,22 @@ final class ProfileStore {
         String iv = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP);
         String encrypted = Base64.encodeToString(
                 cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
-        profiles.add(0, new Profile(id, address, user, pin, iv, encrypted));
+        profiles.add(0, new Profile(id, address, user, pin, iv, encrypted,
+                wolMac, wolDestination, wolPort));
         write(profiles);
+    }
+
+    synchronized void setWakeOnLan(String id, String mac, String destination, int port) throws Exception {
+        List<Profile> profiles = list();
+        for (int n = 0; n < profiles.size(); n++) {
+            Profile old = profiles.get(n);
+            if (!old.id.equals(id)) continue;
+            profiles.set(n, new Profile(old.id, old.address, old.user, old.pin, old.iv,
+                    old.encryptedPassword, mac, destination, port));
+            write(profiles);
+            return;
+        }
+        throw new IOException("Saved KVM was not found.");
     }
 
     String password(Profile profile) throws Exception {
