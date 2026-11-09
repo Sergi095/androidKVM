@@ -14,26 +14,13 @@ This app contains no TouchKVM or Termux code.
 
 ## Screenshots
 
-Captured from androidKVM in an Android emulator using local demo KVMs. The
-console examples use a sample image; the Power example uses a demo server
-without video. No personal device or credentials are shown. Your phone's
-keyboard may look different.
+Captured in an Android emulator with a demo KVM. The console shows a sample
+image; no personal device or credentials are shown. Your phone's keyboard may
+look different.
 
-| Add a KVM | Saved KVMs |
-| --- | --- |
-| <img src="docs/screenshots/connect.png" alt="Add a KVM form with the raccoon logo" width="280"> | <img src="docs/screenshots/saved-kvms.png" alt="Saved KVM card and add button" width="280"> |
-
-| Console | Console with keyboard |
-| --- | --- |
-| <img src="docs/screenshots/console.png" alt="Remote console with the keyboard hidden" width="280"> | <img src="docs/screenshots/keyboard.png" alt="Remote console with the Android keyboard and extra keys" width="280"> |
-
-<img src="docs/screenshots/updates.png" alt="Updates tab offering version 0.1.5 from GitHub Releases" width="280">
-
-| WOL settings on a saved KVM | Per-KVM WOL settings |
-| --- | --- |
-| <img src="docs/screenshots/wol-card.png" alt="Saved KVM card with a WOL settings button" width="280"> | <img src="docs/screenshots/wol-settings.png" alt="WOL settings asking for the computer MAC, local and VPN destinations, and UDP port" width="280"> |
-
-<img src="docs/screenshots/power-wol.png" alt="Power dialog with a Wake via WOL option" width="280">
+| Saved KVMs | Console | Keyboard and extra keys |
+| --- | --- | --- |
+| <img src="docs/screenshots/saved-kvms.png" alt="Saved KVM card and raccoon logo" width="240"> | <img src="docs/screenshots/console.png" alt="Remote console" width="240"> | <img src="docs/screenshots/keyboard.png" alt="Android keyboard and extra keys" width="240"> |
 
 ## Quick start
 
