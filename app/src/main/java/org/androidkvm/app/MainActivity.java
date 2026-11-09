@@ -6,11 +6,13 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.SurfaceTexture;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -20,6 +22,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.WindowInsets;
@@ -29,11 +32,15 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
+import android.view.TextureView;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -67,13 +74,20 @@ public final class MainActivity extends Activity {
     private final List<Button> modifierButtons = new ArrayList<>();
     private PikvmClient client;
     private MjpegReader videoReader;
+    private H264Reader h264Reader;
     private Bitmap currentFrame;
     private ScrollView loginPage;
     private LinearLayout consolePage;
     private LinearLayout loginPanel;
+    private LinearLayout savedPanel;
     private LinearLayout extraKeys;
     private EditText addressInput, userInput, passwordInput, pinInput;
+    private CheckBox rememberInput;
+    private ProfileStore profileStore;
     private RemoteScreen screen;
+    private FrameLayout videoArea;
+    private TextureView fastVideo;
+    private int videoWidth, videoHeight;
     private RemoteInput remoteInput;
     private TextView message, videoStatus, powerStatus;
     private Button loginButton, onButton, offButton;
@@ -90,6 +104,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        profileStore = new ProfileStore(this);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -137,6 +152,10 @@ public final class MainActivity extends Activity {
         root.addView(title);
         root.addView(text("PiKVM-compatible console", 14, MUTED));
 
+        savedPanel = panel();
+        root.addView(savedPanel, spaced());
+        renderSavedProfiles();
+
         loginPanel = panel();
         root.addView(loginPanel, spaced());
         loginPanel.addView(text("Connect", 20, TEXT));
@@ -151,7 +170,12 @@ public final class MainActivity extends Activity {
         for (EditText input : new EditText[]{addressInput, userInput, passwordInput, pinInput}) {
             loginPanel.addView(input, spaced());
         }
-        loginPanel.addView(text("If Android does not trust the certificate, you can inspect its fingerprint before connecting. Passwords are not saved. For 2FA, append the current code to the password.", 12, MUTED), spaced());
+        rememberInput = new CheckBox(this);
+        rememberInput.setText("Save this KVM and password on this phone");
+        rememberInput.setTextColor(TEXT);
+        rememberInput.setChecked(true);
+        loginPanel.addView(rememberInput, spaced());
+        loginPanel.addView(text("Saved passwords are encrypted with Android Keystore. If you use 2FA, enter a fresh code before reconnecting. Compare an untrusted certificate fingerprint with your KVM before accepting it.", 12, MUTED), spaced());
         loginButton = button("Connect", ACCENT, BG);
         loginButton.setOnClickListener(view -> login());
         loginPanel.addView(loginButton, spaced());
@@ -188,16 +212,34 @@ public final class MainActivity extends Activity {
         Button power = compactButton("Power");
         power.setOnClickListener(view -> showPowerDialog());
         toolbar.addView(power, new LinearLayout.LayoutParams(dp(68), dp(40)));
-        Button disconnect = compactButton("×");
-        disconnect.setContentDescription("Disconnect");
+        Button disconnect = compactButton("KVMs");
+        disconnect.setContentDescription("Disconnect and choose another KVM");
         disconnect.setOnClickListener(view -> logout());
-        toolbar.addView(disconnect, new LinearLayout.LayoutParams(dp(42), dp(40)));
+        toolbar.addView(disconnect, new LinearLayout.LayoutParams(dp(64), dp(40)));
         consolePage.addView(toolbar);
 
+        videoArea = new FrameLayout(this);
+        videoArea.setBackgroundColor(Color.BLACK);
+        fastVideo = new TextureView(this);
+        fastVideo.setVisibility(View.GONE);
+        fastVideo.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
+                if (client != null && client.hasNativeVideo()) startNativeVideo(client);
+            }
+            @Override public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
+                updateFastVideoTransform();
+            }
+            @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+                if (h264Reader != null) { h264Reader.stop(); h264Reader = null; }
+                return true;
+            }
+            @Override public void onSurfaceTextureUpdated(SurfaceTexture texture) { }
+        });
+        videoArea.addView(fastVideo, new FrameLayout.LayoutParams(-1, -1));
         screen = new RemoteScreen(this);
-        screen.setBackgroundColor(Color.BLACK);
         screen.setContentDescription("Remote screen. Touch to move pointer; tap to click.");
-        consolePage.addView(screen, new LinearLayout.LayoutParams(-1, 0, 1));
+        videoArea.addView(screen, new FrameLayout.LayoutParams(-1, -1));
+        consolePage.addView(videoArea, new LinearLayout.LayoutParams(-1, 0, 1));
 
         videoStatus = text("Connecting to video…", 11, MUTED);
         videoStatus.setPadding(dp(8), 0, dp(8), 0);
@@ -355,11 +397,59 @@ public final class MainActivity extends Activity {
         if (keyboard != null) keyboard.restartInput(remoteInput);
     }
 
+    private void renderSavedProfiles() {
+        savedPanel.removeAllViews();
+        List<ProfileStore.Profile> profiles = profileStore.list();
+        savedPanel.setVisibility(profiles.isEmpty() ? View.GONE : View.VISIBLE);
+        if (profiles.isEmpty()) return;
+        savedPanel.addView(text("Saved KVMs", 18, TEXT));
+        for (ProfileStore.Profile profile : profiles) {
+            LinearLayout item = row();
+            Button connect = button(profile.address + "  ·  " + profile.user, Color.rgb(45, 59, 78), TEXT);
+            connect.setOnClickListener(view -> connectSavedProfile(profile));
+            item.addView(connect, new LinearLayout.LayoutParams(0, dp(52), 1));
+            Button remove = button("×", DANGER, TEXT);
+            remove.setContentDescription("Remove saved KVM " + profile.address);
+            LinearLayout.LayoutParams removeSize = new LinearLayout.LayoutParams(dp(52), dp(52));
+            removeSize.leftMargin = dp(8);
+            item.addView(remove, removeSize);
+            remove.setOnClickListener(view -> new AlertDialog.Builder(this)
+                    .setTitle("Remove saved KVM?")
+                    .setMessage(profile.address + " (" + profile.user + ")")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Remove", (dialog, which) -> {
+                        try {
+                            profileStore.remove(profile.id);
+                            passwordInput.setText("");
+                            renderSavedProfiles();
+                        } catch (Exception error) {
+                            showMessage("Could not remove saved KVM.");
+                        }
+                    }).show());
+            savedPanel.addView(item, spaced());
+        }
+    }
+
+    private void connectSavedProfile(ProfileStore.Profile profile) {
+        addressInput.setText(profile.address);
+        userInput.setText(profile.user);
+        pinInput.setText(profile.pin);
+        try {
+            passwordInput.setText(profileStore.password(profile));
+            rememberInput.setChecked(true);
+            login();
+        } catch (Exception error) {
+            passwordInput.setText("");
+            showMessage("Saved password is unavailable. Enter it again to reconnect.");
+        }
+    }
+
     private void login() {
         String address = addressInput.getText().toString().trim();
         String user = userInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
         String pin = pinInput.getText().toString().trim();
+        boolean remember = rememberInput.isChecked();
         if (address.isEmpty() || user.isEmpty() || password.isEmpty()) {
             showMessage("Enter the KVM address, username, and password.");
             return;
@@ -370,14 +460,27 @@ public final class MainActivity extends Activity {
             try {
                 PikvmClient next = new PikvmClient(address, pin);
                 next.login(user, password);
+                next.prepareNativeVideo(user, password);
+                String saveError = null;
+                if (remember) {
+                    try { profileStore.save(address, user, pin, password); }
+                    catch (Exception error) { saveError = "Connected, but could not save this KVM."; }
+                }
+                String finalSaveError = saveError;
                 runOnUiThread(() -> {
                     client = next;
-                    getPreferences(0).edit().putString("address", address).putString("user", user)
-                            .putString("pin", pin).apply();
+                    if (remember) {
+                        getPreferences(0).edit().putString("address", address).putString("user", user)
+                                .putString("pin", pin).apply();
+                    } else {
+                        getPreferences(0).edit().clear().apply();
+                    }
                     passwordInput.setText("");
+                    renderSavedProfiles();
                     setContentView(consolePage);
                     loginButton.setEnabled(true);
-                    showMessage("Connected");
+                    showMessage(finalSaveError == null ? "Connected" : finalSaveError);
+                    if (finalSaveError != null) Toast.makeText(this, finalSaveError, Toast.LENGTH_LONG).show();
                     startVideo(next);
                     handler.removeCallbacks(powerPoll);
                     handler.post(powerPoll);
@@ -439,6 +542,63 @@ public final class MainActivity extends Activity {
     private void startVideo(PikvmClient active) {
         stopVideo();
         active.ensureEvents();
+        currentFrame = null;
+        videoWidth = videoHeight = 0;
+        screen.invalidate();
+        if (active.hasNativeVideo()) {
+            videoStatus.setText("Connecting to H.264 video…");
+            fastVideo.setVisibility(View.VISIBLE);
+            fastVideo.post(() -> {
+                if (client == active && fastVideo.isAvailable()) startNativeVideo(active);
+            });
+        } else {
+            startMjpegVideo(active);
+        }
+    }
+
+    private void startNativeVideo(PikvmClient active) {
+        if (h264Reader != null || client != active || !fastVideo.isAvailable()) return;
+        Surface surface = new Surface(fastVideo.getSurfaceTexture());
+        h264Reader = new H264Reader(active, surface, new H264Reader.Listener() {
+            @Override public void onReady() {
+                runOnUiThread(() -> {
+                    if (client == active && h264Reader != null) videoStatus.setText("Live screen (H.264)");
+                });
+            }
+            @Override public void onSize(int width, int height) {
+                runOnUiThread(() -> {
+                    if (client != active || h264Reader == null) return;
+                    videoWidth = width;
+                    videoHeight = height;
+                    updateFastVideoTransform();
+                });
+            }
+            @Override public void onFailure() {
+                runOnUiThread(() -> {
+                    if (client != active || h264Reader == null) return;
+                    h264Reader = null;
+                    fastVideo.setVisibility(View.GONE);
+                    videoWidth = videoHeight = 0;
+                    startMjpegVideo(active);
+                });
+            }
+        });
+        h264Reader.start();
+    }
+
+    private void updateFastVideoTransform() {
+        if (videoWidth <= 0 || videoHeight <= 0 || fastVideo.getWidth() <= 0 || fastVideo.getHeight() <= 0) return;
+        float scale = Math.min((float) fastVideo.getWidth() / videoWidth,
+                (float) fastVideo.getHeight() / videoHeight);
+        Matrix transform = new Matrix();
+        transform.setScale(videoWidth * scale / fastVideo.getWidth(),
+                videoHeight * scale / fastVideo.getHeight(),
+                fastVideo.getWidth() / 2f, fastVideo.getHeight() / 2f);
+        fastVideo.setTransform(transform);
+    }
+
+    private void startMjpegVideo(PikvmClient active) {
+        fastVideo.setVisibility(View.GONE);
         AtomicReference<Bitmap> latestFrame = new AtomicReference<>();
         AtomicBoolean frameQueued = new AtomicBoolean();
         Runnable renderFrame = new Runnable() {
@@ -446,6 +606,8 @@ public final class MainActivity extends Activity {
                 Bitmap frame = latestFrame.getAndSet(null);
                 if (frame != null && client == active) {
                     currentFrame = frame;
+                    videoWidth = frame.getWidth();
+                    videoHeight = frame.getHeight();
                     screen.invalidate();
                 }
                 frameQueued.set(false);
@@ -467,10 +629,15 @@ public final class MainActivity extends Activity {
     }
 
     private void stopVideo() {
+        if (h264Reader != null) {
+            h264Reader.stop();
+            h264Reader = null;
+        }
         if (videoReader != null) {
             videoReader.stop();
             videoReader = null;
         }
+        if (fastVideo != null) fastVideo.setVisibility(View.GONE);
     }
 
     private void refreshPower() {
@@ -602,11 +769,10 @@ public final class MainActivity extends Activity {
     }
 
     private PointF screenPoint(float x, float y) {
-        Bitmap frame = currentFrame;
-        if (frame == null || screen.getWidth() == 0 || screen.getHeight() == 0) return null;
-        float scale = Math.min((float) screen.getWidth() / frame.getWidth(),
-                (float) screen.getHeight() / frame.getHeight());
-        float width = frame.getWidth() * scale, height = frame.getHeight() * scale;
+        if (videoWidth <= 0 || videoHeight <= 0 || screen.getWidth() == 0 || screen.getHeight() == 0) return null;
+        float scale = Math.min((float) screen.getWidth() / videoWidth,
+                (float) screen.getHeight() / videoHeight);
+        float width = videoWidth * scale, height = videoHeight * scale;
         float left = (screen.getWidth() - width) / 2, top = (screen.getHeight() - height) / 2;
         return new PointF(Math.max(0f, Math.min(1f, (x - left) / width)),
                 Math.max(0f, Math.min(1f, (y - top) / height)));
@@ -881,6 +1047,7 @@ public final class MainActivity extends Activity {
         stopVideo();
         handler.removeCallbacks(powerPoll);
         currentFrame = null;
+        videoWidth = videoHeight = 0;
         screen.invalidate();
         modifiers.clear();
         updateModifierButtons();

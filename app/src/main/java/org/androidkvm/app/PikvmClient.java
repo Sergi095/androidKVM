@@ -1,5 +1,7 @@
 package org.androidkvm.app;
 
+import android.util.Base64;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -21,8 +23,12 @@ import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Locale;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
@@ -65,6 +71,8 @@ final class PikvmClient {
     private volatile WebSocket events;
     private volatile boolean eventsReady;
     private Boolean directTextSupported;
+    private String nativeBaseUrl;
+    private String nativeCookie;
 
     PikvmClient(String address, String fingerprint) throws Exception {
         baseUrl = normalizeAddress(address);
@@ -205,6 +213,79 @@ final class PikvmClient {
         } finally {
             connection.disconnect();
         }
+    }
+
+    /** Try the native NanoKVM video service only for a bridge using the same pinned certificate. */
+    boolean prepareNativeVideo(String user, String password) {
+        if (!pinned) return false;
+        try {
+            if (!request("/api/info?fields=bridge", "GET", null, null).has("bridge")) return false;
+            URI address = new URI(baseUrl);
+            String target = new URI("https", null, address.getHost(), 443, null, null, null).toString();
+            if (target.equals(baseUrl)) return false;
+            byte[] body = new JSONObject().put("username", user)
+                    .put("password", encodeNativePassword(password)).toString()
+                    .getBytes(StandardCharsets.UTF_8);
+            HttpsURLConnection connection = (HttpsURLConnection) new URL(target + "/api/auth/login")
+                    .openConnection();
+            connection.setSSLSocketFactory(pinnedFactory);
+            connection.setHostnameVerifier((host, session) -> true);
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(8000);
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setFixedLengthStreamingMode(body.length);
+            try {
+                try (OutputStream output = connection.getOutputStream()) { output.write(body); }
+                if (connection.getResponseCode() != 200) return false;
+                JSONObject response = new JSONObject(new String(
+                        readLimited(connection.getInputStream(), 65536), StandardCharsets.UTF_8));
+                String setCookie = connection.getHeaderField("Set-Cookie");
+                if (response.optInt("code", -1) != 0 || setCookie == null) return false;
+                nativeBaseUrl = target;
+                nativeCookie = setCookie.split(";", 2)[0];
+                return true;
+            } finally {
+                connection.disconnect();
+            }
+        } catch (Exception unavailable) {
+            return false;
+        }
+    }
+
+    boolean hasNativeVideo() { return nativeCookie != null; }
+
+    WebSocket openNativeVideo(WebSocketListener listener) {
+        ensureEvents();
+        return socketClient.newWebSocket(new Request.Builder()
+                .url(nativeBaseUrl + "/api/stream/h264/direct?flow=2")
+                .header("Cookie", nativeCookie).build(), listener);
+    }
+
+    private static String encodeNativePassword(String password) throws Exception {
+        byte[] salt = new byte[8];
+        new SecureRandom().nextBytes(salt);
+        byte[] secret = "nanokvm-sipeed-2024".getBytes(StandardCharsets.UTF_8);
+        byte[] material = new byte[48], previous = new byte[0];
+        MessageDigest md5 = MessageDigest.getInstance("MD5");
+        for (int offset = 0; offset < material.length; offset += 16) {
+            md5.update(previous);
+            md5.update(secret);
+            md5.update(salt);
+            previous = md5.digest();
+            System.arraycopy(previous, 0, material, offset, 16);
+        }
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        cipher.init(Cipher.ENCRYPT_MODE,
+                new SecretKeySpec(Arrays.copyOfRange(material, 0, 32), "AES"),
+                new IvParameterSpec(Arrays.copyOfRange(material, 32, 48)));
+        byte[] encrypted = cipher.doFinal(password.getBytes(StandardCharsets.UTF_8));
+        byte[] openssl = new byte[16 + encrypted.length];
+        System.arraycopy("Salted__".getBytes(StandardCharsets.US_ASCII), 0, openssl, 0, 8);
+        System.arraycopy(salt, 0, openssl, 8, 8);
+        System.arraycopy(encrypted, 0, openssl, 16, encrypted.length);
+        return encode(Base64.encodeToString(openssl, Base64.NO_WRAP));
     }
 
     PowerState powerState() throws IOException, JSONException {
@@ -415,6 +496,7 @@ final class PikvmClient {
 
     void logout() {
         stopEvents();
+        nativeCookie = null;
         try {
             request("/api/auth/logout", "POST", new byte[0], "text/plain");
         } catch (Exception ignored) {
