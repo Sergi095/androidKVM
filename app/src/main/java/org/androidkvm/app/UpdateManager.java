@@ -138,7 +138,8 @@ final class UpdateManager {
     private void verifyPackage(File apk, Release release) throws Exception {
         PackageManager pm = context.getPackageManager();
         int flag = Build.VERSION.SDK_INT >= 28
-                ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+                ? PackageManager.GET_SIGNING_CERTIFICATES | PackageManager.GET_SIGNATURES
+                : PackageManager.GET_SIGNATURES;
         PackageInfo incoming = pm.getPackageArchiveInfo(apk.getAbsolutePath(), flag);
         PackageInfo installed = pm.getPackageInfo(context.getPackageName(), flag);
         if (incoming == null || !context.getPackageName().equals(incoming.packageName)
@@ -147,7 +148,9 @@ final class UpdateManager {
             throw new IllegalStateException("Downloaded APK is not a newer androidKVM build.");
         Signature[] newSigners = signers(incoming), currentSigners = signers(installed);
         if (newSigners == null || currentSigners == null || newSigners.length != currentSigners.length)
-            throw new IllegalStateException("Downloaded APK has an unexpected signing key.");
+            throw new IllegalStateException("Downloaded APK signing info is missing or incomplete (" +
+                    (newSigners == null ? "none" : newSigners.length) + " / " +
+                    (currentSigners == null ? "none" : currentSigners.length) + ").");
         for (int i = 0; i < newSigners.length; i++) {
             if (!Arrays.equals(newSigners[i].toByteArray(), currentSigners[i].toByteArray()))
                 throw new IllegalStateException("Downloaded APK has an unexpected signing key.");
@@ -155,8 +158,11 @@ final class UpdateManager {
     }
 
     private static Signature[] signers(PackageInfo info) {
-        return Build.VERSION.SDK_INT >= 28 && info.signingInfo != null
-                ? info.signingInfo.getApkContentsSigners() : info.signatures;
+        if (Build.VERSION.SDK_INT >= 28 && info.signingInfo != null) {
+            Signature[] signatures = info.signingInfo.getApkContentsSigners();
+            if (signatures != null && signatures.length > 0) return signatures;
+        }
+        return info.signatures;
     }
 
     private static String hex(byte[] bytes) {
