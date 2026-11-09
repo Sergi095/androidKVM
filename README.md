@@ -26,6 +26,8 @@ Your phone's keyboard may look different.
 | --- | --- |
 | <img src="docs/screenshots/console.png" alt="Remote console with the keyboard hidden" width="280"> | <img src="docs/screenshots/keyboard.png" alt="Remote console with the Android keyboard and extra keys" width="280"> |
 
+<img src="docs/screenshots/updates.png" alt="Updates tab offering version 0.1.5 from GitHub Releases" width="280">
+
 ## Quick start
 
 1. Install the signed release APK from this repository's Releases page.
