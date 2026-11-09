@@ -63,6 +63,7 @@ public final class MainActivity extends Activity {
     private static final int TEXT = Color.rgb(245, 249, 251);
     private static final int MUTED = Color.rgb(160, 178, 195);
     private static final int ACCENT = Color.rgb(41, 197, 239);
+    private static final int KEY_ACCENT = Color.rgb(76, 205, 184);
     private static final int DANGER = Color.rgb(182, 77, 82);
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -295,8 +296,7 @@ public final class MainActivity extends Activity {
         consolePage.addView(videoStatus, new LinearLayout.LayoutParams(-1, dp(18)));
 
         extraKeys = column();
-        extraKeys.setBackgroundColor(BG);
-        extraKeys.setPadding(dp(3), dp(4), dp(3), dp(3));
+        extraKeys.setBackgroundColor(CONSOLE_BG);
         extraKeys.addView(compactKeyRow(new String[][]{
                 {"ESC", "Escape"}, {"/", "Slash"}, {"−", "Minus"},
                 {"HOME", "Home"}, {"↑", "ArrowUp"}, {"END", "End"}, {"PGUP", "PageUp"}
@@ -350,7 +350,6 @@ public final class MainActivity extends Activity {
             String label = item[0], code = item[1];
             Button key = compactButton(label);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(54), dp(43));
-            params.rightMargin = dp(3);
             row.addView(key, params);
             bindKey(key, label, code);
         }
@@ -363,9 +362,7 @@ public final class MainActivity extends Activity {
         for (String[] item : keys) {
             String label = item[0], code = item[1];
             Button key = compactButton(label);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(43), 1);
-            params.rightMargin = dp(3);
-            row.addView(key, params);
+            row.addView(key, new LinearLayout.LayoutParams(0, dp(43), 1));
             bindKey(key, label, code);
         }
         return row;
@@ -385,7 +382,6 @@ public final class MainActivity extends Activity {
     }
 
     private void bindKey(Button key, String label, String code) {
-        key.setBackground(rounded(SURFACE));
         if (code.equals("ControlLeft") || code.equals("AltLeft") || code.equals("ShiftLeft")) {
             modifierButtons.add(key);
             key.setTag(new String[]{label, code});
@@ -780,9 +776,9 @@ public final class MainActivity extends Activity {
             String[] tag = (String[]) button.getTag();
             boolean active = modifiers.contains(tag[1]);
             button.setText(tag[0]);
-            if (active) button.setBackground(rounded(ACCENT));
-            else button.setBackground(rounded(SURFACE));
-            button.setTextColor(active ? BG : TEXT);
+            if (active) button.setBackground(rounded(KEY_ACCENT));
+            else button.setBackgroundColor(CONSOLE_BG);
+            button.setTextColor(active ? Color.rgb(16, 24, 40) : TEXT);
         }
     }
 
