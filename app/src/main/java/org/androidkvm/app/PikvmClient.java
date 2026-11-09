@@ -1,7 +1,6 @@
 package org.androidkvm.app;
 
 import org.json.JSONException;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -320,30 +319,6 @@ final class PikvmClient {
         if (sendInputEvent("mouse_move", new JSONObject().put("to", point))) return;
         request("/api/hid/events/send_mouse_move?to_x=" + toX + "&to_y=" + toY,
                 "POST", new byte[0], "text/plain");
-    }
-
-    void moveMouseRelative(int dx, int dy) throws IOException, JSONException {
-        while (dx != 0 || dy != 0) {
-            JSONArray steps = new JSONArray();
-            int[] xs = new int[128], ys = new int[128];
-            int count = 0;
-            while ((dx != 0 || dy != 0) && count < 128) {
-                int stepX = Math.max(-127, Math.min(127, dx));
-                int stepY = Math.max(-127, Math.min(127, dy));
-                xs[count] = stepX;
-                ys[count] = stepY;
-                steps.put(new JSONObject().put("x", stepX).put("y", stepY));
-                dx -= stepX;
-                dy -= stepY;
-                count++;
-            }
-            if (!sendInputEvent("mouse_relative", new JSONObject().put("delta", steps).put("squash", true))) {
-                for (int n = 0; n < count; n++) {
-                    request("/api/hid/events/send_mouse_relative?delta_x=" + xs[n] + "&delta_y=" + ys[n],
-                            "POST", new byte[0], "text/plain");
-                }
-            }
-        }
     }
 
     void mouseClick(String button, int count) throws IOException, JSONException {

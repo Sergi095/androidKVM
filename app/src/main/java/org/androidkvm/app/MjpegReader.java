@@ -86,8 +86,8 @@ final class MjpegReader {
             if (length == 0) continue;
             byte[] jpeg = new byte[length];
             readFully(input, jpeg);
-            long now = System.currentTimeMillis();
-            if (now - lastFrame >= 100) {
+            long now = System.nanoTime();
+            if (lastFrame == 0 || now - lastFrame >= 33_000_000L) {
                 BitmapFactory.Options options = new BitmapFactory.Options();
                 options.inPreferredConfig = Bitmap.Config.RGB_565;
                 Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, options);

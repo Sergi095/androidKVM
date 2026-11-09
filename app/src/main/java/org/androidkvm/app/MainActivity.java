@@ -4,10 +4,13 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -28,7 +31,6 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -39,7 +41,6 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLHandshakeException;
@@ -61,8 +62,6 @@ public final class MainActivity extends Activity {
     private final StringBuilder pendingText = new StringBuilder();
     private final Runnable textFlush = this::flushTextNow;
     private final AtomicReference<PointF> pendingMove = new AtomicReference<>();
-    private final AtomicInteger pendingMouseDx = new AtomicInteger();
-    private final AtomicInteger pendingMouseDy = new AtomicInteger();
     private final AtomicBoolean moveQueued = new AtomicBoolean();
     private final LinkedHashSet<String> modifiers = new LinkedHashSet<>();
     private final List<Button> modifierButtons = new ArrayList<>();
@@ -197,7 +196,6 @@ public final class MainActivity extends Activity {
 
         screen = new RemoteScreen(this);
         screen.setBackgroundColor(Color.BLACK);
-        screen.setScaleType(ImageView.ScaleType.FIT_CENTER);
         screen.setContentDescription("Remote screen. Touch to move pointer; tap to click.");
         consolePage.addView(screen, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -441,14 +439,25 @@ public final class MainActivity extends Activity {
     private void startVideo(PikvmClient active) {
         stopVideo();
         active.ensureEvents();
+        AtomicReference<Bitmap> latestFrame = new AtomicReference<>();
+        AtomicBoolean frameQueued = new AtomicBoolean();
+        Runnable renderFrame = new Runnable() {
+            @Override public void run() {
+                Bitmap frame = latestFrame.getAndSet(null);
+                if (frame != null && client == active) {
+                    currentFrame = frame;
+                    screen.invalidate();
+                }
+                frameQueued.set(false);
+                if (latestFrame.get() != null && frameQueued.compareAndSet(false, true)) {
+                    handler.post(this);
+                }
+            }
+        };
         videoReader = new MjpegReader(active, new MjpegReader.Listener() {
             @Override public void onFrame(Bitmap frame) {
-                runOnUiThread(() -> {
-                    if (client == active) {
-                        currentFrame = frame;
-                        screen.setImageBitmap(frame);
-                    }
-                });
+                latestFrame.set(frame);
+                if (frameQueued.compareAndSet(false, true)) handler.post(renderFrame);
             }
             @Override public void onStatus(String status) {
                 runOnUiThread(() -> { if (client == active) videoStatus.setText(status); });
@@ -610,13 +619,6 @@ public final class MainActivity extends Activity {
         if (moveQueued.compareAndSet(false, true)) mouseIo.execute(this::drainMouseMoves);
     }
 
-    private void queueMouseDelta(int dx, int dy) {
-        if (client == null || (dx == 0 && dy == 0)) return;
-        pendingMouseDx.addAndGet(dx);
-        pendingMouseDy.addAndGet(dy);
-        if (moveQueued.compareAndSet(false, true)) mouseIo.execute(this::drainMouseMoves);
-    }
-
     private void drainMouseMoves() {
         try {
             sendPendingMouseMoves(client);
@@ -624,8 +626,7 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> showMessage(error.getMessage()));
         } finally {
             moveQueued.set(false);
-            if ((pendingMove.get() != null || pendingMouseDx.get() != 0 || pendingMouseDy.get() != 0)
-                    && moveQueued.compareAndSet(false, true)) {
+            if (pendingMove.get() != null && moveQueued.compareAndSet(false, true)) {
                 mouseIo.execute(this::drainMouseMoves);
             }
         }
@@ -634,12 +635,9 @@ public final class MainActivity extends Activity {
     private void sendPendingMouseMoves(PikvmClient active) throws Exception {
         while (true) {
             PointF point = pendingMove.getAndSet(null);
-            int dx = pendingMouseDx.getAndSet(0);
-            int dy = pendingMouseDy.getAndSet(0);
-            if (point == null && dx == 0 && dy == 0) return;
+            if (point == null) return;
             if (active != null && client == active) {
-                if (point != null) active.moveMouse(point.x, point.y);
-                if (dx != 0 || dy != 0) active.moveMouseRelative(dx, dy);
+                active.moveMouse(point.x, point.y);
             }
         }
     }
@@ -746,25 +744,34 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private final class RemoteScreen extends ImageView {
+    private final class RemoteScreen extends View {
+        private final Paint videoPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
         private final int slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
         private Runnable longPress;
         private Runnable pendingClick;
-        private float startX, startY, lastX, lastY, residualX, residualY;
+        private float startX, startY;
         private float lastTapX, lastTapY, scrollY;
         private long lastTapAt;
         private boolean moved, multiTouch, scrolled, dragging;
 
         RemoteScreen(Context context) { super(context); }
 
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            Bitmap frame = currentFrame;
+            if (frame == null || getWidth() == 0 || getHeight() == 0) return;
+            float scale = Math.min((float) getWidth() / frame.getWidth(),
+                    (float) getHeight() / frame.getHeight());
+            float width = frame.getWidth() * scale, height = frame.getHeight() * scale;
+            float left = (getWidth() - width) / 2, top = (getHeight() - height) / 2;
+            canvas.drawBitmap(frame, null, new RectF(left, top, left + width, top + height), videoPaint);
+        }
+
         @Override public boolean onTouchEvent(MotionEvent event) {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     startX = event.getX();
                     startY = event.getY();
-                    lastX = startX;
-                    lastY = startY;
-                    residualX = residualY = 0;
                     moved = multiTouch = scrolled = dragging = false;
                     resetKeyboardComposition();
                     queueMouseMove(startX, startY);
@@ -799,14 +806,14 @@ public final class MainActivity extends Activity {
                             moved = true;
                             if (!dragging) cancelRemoteLongPress();
                         }
-                        movePointerWithFinger(event.getX(), event.getY());
+                        queueMouseMove(event.getX(), event.getY());
                     }
                     return true;
                 case MotionEvent.ACTION_POINTER_UP:
                     return true;
                 case MotionEvent.ACTION_UP:
                     cancelRemoteLongPress();
-                    if (!multiTouch && moved) movePointerWithFinger(event.getX(), event.getY());
+                    if (!multiTouch && moved) queueMouseMove(event.getX(), event.getY());
                     if (dragging) {
                         mouseButton("left", false);
                     } else if (multiTouch) {
@@ -850,22 +857,6 @@ public final class MainActivity extends Activity {
             longPress = null;
         }
 
-        private void movePointerWithFinger(float x, float y) {
-            Bitmap frame = currentFrame;
-            if (frame != null && getWidth() > 0 && getHeight() > 0) {
-                float scale = Math.min((float) getWidth() / frame.getWidth(),
-                        (float) getHeight() / frame.getHeight());
-                residualX += (x - lastX) / scale;
-                residualY += (y - lastY) / scale;
-                int dx = (int) residualX, dy = (int) residualY;
-                residualX -= dx;
-                residualY -= dy;
-                queueMouseDelta(dx, dy);
-            }
-            lastX = x;
-            lastY = y;
-        }
-
         void resetGesture() {
             cancelRemoteLongPress();
             if (pendingClick != null) handler.removeCallbacks(pendingClick);
@@ -884,15 +875,13 @@ public final class MainActivity extends Activity {
         PikvmClient old = client;
         screen.resetGesture();
         pendingMove.set(null);
-        pendingMouseDx.set(0);
-        pendingMouseDy.set(0);
         handler.removeCallbacks(textFlush);
         pendingText.setLength(0);
         client = null;
         stopVideo();
         handler.removeCallbacks(powerPoll);
-        screen.setImageDrawable(null);
         currentFrame = null;
+        screen.invalidate();
         modifiers.clear();
         updateModifierButtons();
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
