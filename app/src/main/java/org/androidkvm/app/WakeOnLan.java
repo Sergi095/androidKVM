@@ -10,6 +10,29 @@ import java.util.Locale;
 final class WakeOnLan {
     private WakeOnLan() { }
 
+    interface SocketBinder { void bind(DatagramSocket socket) throws Exception; }
+
+    static final class SendResult {
+        final boolean localSent, vpnSent;
+        final String localError, vpnError;
+
+        SendResult(boolean localSent, boolean vpnSent, String localError, String vpnError) {
+            this.localSent = localSent;
+            this.vpnSent = vpnSent;
+            this.localError = localError;
+            this.vpnError = vpnError;
+        }
+
+        String message() {
+            if (localSent && vpnSent) return "WOL packets sent to local and VPN destinations.";
+            if (localSent && vpnError.isEmpty()) return "WOL packet sent to local destination.";
+            if (localSent) return "Local WOL packet sent; VPN send failed: " + vpnError;
+            if (vpnSent) return "VPN WOL packet sent; local send failed: " + localError;
+            return "WOL failed. Local: " + localError
+                    + (vpnError.isEmpty() ? "" : "; VPN: " + vpnError);
+        }
+    }
+
     static String canonicalMac(String value) {
         String mac = value.trim();
         if (!mac.matches("(?i)[0-9a-f]{12}")
@@ -54,6 +77,10 @@ final class WakeOnLan {
     }
 
     static void send(String mac, String destination, int port) throws Exception {
+        send(mac, destination, port, null);
+    }
+
+    private static void send(String mac, String destination, int port, SocketBinder binder) throws Exception {
         if (port < 1 || port > 65535) throw new IllegalArgumentException("Invalid UDP port.");
         InetAddress address = InetAddress.getByName(destination(destination));
         if (!(address instanceof Inet4Address))
@@ -62,7 +89,35 @@ final class WakeOnLan {
         DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.setBroadcast(true);
+            if (binder != null) binder.bind(socket);
             socket.send(packet);
         }
+    }
+
+    static SendResult sendBoth(String mac, String localDestination,
+                               String vpnDestination, int port) {
+        return sendBoth(mac, localDestination, vpnDestination, port, null, null);
+    }
+
+    static SendResult sendBoth(String mac, String localDestination, String vpnDestination,
+                               int port, SocketBinder localBinder, SocketBinder vpnBinder) {
+        boolean localSent = false, vpnSent = false;
+        String localError = "", vpnError = "";
+        try {
+            send(mac, localDestination, port, localBinder);
+            localSent = true;
+        } catch (Exception error) {
+            localError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        }
+        if (!vpnDestination.isEmpty() || vpnBinder != null) {
+            try {
+                send(mac, vpnDestination.isEmpty() ? "255.255.255.255" : vpnDestination,
+                        port, vpnBinder);
+                vpnSent = true;
+            } catch (Exception error) {
+                vpnError = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            }
+        }
+        return new SendResult(localSent, vpnSent, localError, vpnError);
     }
 }

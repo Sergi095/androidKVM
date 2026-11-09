@@ -14,9 +14,10 @@ This app contains no TouchKVM or Termux code.
 
 ## Screenshots
 
-Captured from androidKVM in an Android emulator using a local demo KVM. The
-remote video is a sample image; no personal device or credentials are shown.
-Your phone's keyboard may look different.
+Captured from androidKVM in an Android emulator using local demo KVMs. The
+console examples use a sample image; the Power example uses a demo server
+without video. No personal device or credentials are shown. Your phone's
+keyboard may look different.
 
 | Add a KVM | Saved KVMs |
 | --- | --- |
@@ -28,9 +29,11 @@ Your phone's keyboard may look different.
 
 <img src="docs/screenshots/updates.png" alt="Updates tab offering version 0.1.5 from GitHub Releases" width="280">
 
-| Wake button on a saved KVM | Per-KVM WOL settings |
+| WOL settings on a saved KVM | Per-KVM WOL settings |
 | --- | --- |
-| <img src="docs/screenshots/wol-card.png" alt="Saved KVM card with Wake PC and WOL settings buttons" width="280"> | <img src="docs/screenshots/wol-settings.png" alt="WOL settings asking for the computer MAC, destination, and UDP port" width="280"> |
+| <img src="docs/screenshots/wol-card.png" alt="Saved KVM card with a WOL settings button" width="280"> | <img src="docs/screenshots/wol-settings.png" alt="WOL settings asking for the computer MAC, local and VPN destinations, and UDP port" width="280"> |
+
+<img src="docs/screenshots/power-wol.png" alt="Power dialog with a Wake via WOL option" width="280">
 
 ## Quick start
 
@@ -73,11 +76,13 @@ signing key and cannot update a release installation.
   two-finger tap for right click, and two-finger vertical swipe to scroll.
   The mouse control button can switch between direct touch and relative trackpad mode.
 - See the reported ATX power LED state and send On or soft Off when ATX control is available.
-- Configure Wake-on-LAN separately for each saved KVM, then tap **Wake PC** on
-  its card to send a magic packet without opening the console.
+- Configure Wake-on-LAN separately for each saved KVM, then tap **Wake via WOL**
+  in the console's Power menu. It sends to the local destination and also tries
+  the VPN/WireGuard route when active or configured.
 - Use a Termux-style extra-key bar with Escape, Tab, Ctrl, Alt, arrows,
-  Home, End, Page Up, Page Down, and a swipeable F1–F12 row. It sits directly
-  above the Android keyboard and hides with it. Tap a modifier first for a shortcut.
+  Home, End, Page Up, Page Down, and a swipeable F1–F12 row with Delete at the
+  end. It sits directly above the Android keyboard and hides with it. Tap a
+  modifier first for a shortcut.
 - Type directly with the Android keyboard. The keyboard button in the console
   toolbar shows or hides it, and the remote screen adjusts to the space available.
 - Mouse movement and ordinary keys use the input WebSocket for lower latency.
@@ -123,11 +128,15 @@ before relying on those buttons.
 ### Wake-on-LAN
 
 On a saved KVM card, tap **Set up Wake-on-LAN**. Enter the **computer's wired
-network MAC address** (not the PiKVM or NanoKVM MAC), a broadcast destination,
-and a UDP port. The defaults are `255.255.255.255` and port `9` for a phone on
-the same LAN. After saving, tap **Wake PC**; the app reports when it sent the
-packet, but cannot confirm that the computer woke. Use **WOL settings** to edit
-or disable it. These settings stay attached to the saved KVM when you reconnect.
+network MAC address** (not the PiKVM or NanoKVM MAC). The local destination
+defaults to `255.255.255.255` and UDP port `9`. Optionally enter a separate
+VPN/WireGuard broadcast or relay address. Open the KVM console, tap its Power
+icon, then tap **Wake via WOL**. The app sends locally first. If a VPN is
+active, it also tries `255.255.255.255` through that VPN; a configured VPN
+destination takes its place. WOL does not confirm whether the computer woke,
+so the app reports which packet sends succeeded.
+Use **WOL settings** on the saved card to edit or disable it. These settings
+stay attached to the saved KVM when you reconnect.
 
 Wake-on-LAN must be enabled in the computer's firmware and network adapter. If
 the phone connects through a VPN or another subnet, use a reachable directed

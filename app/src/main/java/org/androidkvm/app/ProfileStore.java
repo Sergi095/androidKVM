@@ -25,11 +25,12 @@ import javax.crypto.spec.GCMParameterSpec;
 /** Saved KVMs. Only encrypted passwords are written to app preferences. */
 final class ProfileStore {
     static final class Profile {
-        final String id, address, user, pin, iv, encryptedPassword, wolMac, wolDestination;
+        final String id, address, user, pin, iv, encryptedPassword, wolMac, wolDestination,
+                wolVpnDestination;
         final int wolPort;
 
         Profile(String id, String address, String user, String pin, String iv, String encryptedPassword,
-                String wolMac, String wolDestination, int wolPort) {
+                String wolMac, String wolDestination, String wolVpnDestination, int wolPort) {
             this.id = id;
             this.address = address;
             this.user = user;
@@ -38,6 +39,7 @@ final class ProfileStore {
             this.encryptedPassword = encryptedPassword;
             this.wolMac = wolMac;
             this.wolDestination = wolDestination;
+            this.wolVpnDestination = wolVpnDestination;
             this.wolPort = wolPort;
         }
 
@@ -45,6 +47,7 @@ final class ProfileStore {
             return new JSONObject().put("id", id).put("address", address).put("user", user)
                     .put("pin", pin).put("iv", iv).put("password", encryptedPassword)
                     .put("wolMac", wolMac).put("wolDestination", wolDestination)
+                    .put("wolVpnDestination", wolVpnDestination)
                     .put("wolPort", wolPort);
         }
     }
@@ -62,10 +65,13 @@ final class ProfileStore {
             JSONArray data = new JSONArray(preferences.getString("profiles", "[]"));
             for (int n = 0; n < data.length(); n++) {
                 JSONObject item = data.getJSONObject(n);
+                String localDestination = item.optString("wolDestination", "255.255.255.255");
+                String vpnDestination = item.optString("wolVpnDestination",
+                        "255.255.255.255".equals(localDestination) ? "" : localDestination);
                 profiles.add(new Profile(item.getString("id"), item.getString("address"),
                         item.getString("user"), item.optString("pin"), item.getString("iv"),
                         item.getString("password"), item.optString("wolMac"),
-                        item.optString("wolDestination", "255.255.255.255"), item.optInt("wolPort", 9)));
+                        localDestination, vpnDestination, item.optInt("wolPort", 9)));
             }
         } catch (JSONException ignored) {
             // Invalid saved data is never used as a credential.
@@ -76,7 +82,7 @@ final class ProfileStore {
     synchronized void save(String address, String user, String pin, String password) throws Exception {
         List<Profile> profiles = list();
         String id = UUID.randomUUID().toString();
-        String wolMac = "", wolDestination = "255.255.255.255";
+        String wolMac = "", wolDestination = "255.255.255.255", wolVpnDestination = "";
         int wolPort = 9;
         for (int n = 0; n < profiles.size(); n++) {
             Profile existing = profiles.get(n);
@@ -84,6 +90,7 @@ final class ProfileStore {
                 id = existing.id;
                 wolMac = existing.wolMac;
                 wolDestination = existing.wolDestination;
+                wolVpnDestination = existing.wolVpnDestination;
                 wolPort = existing.wolPort;
                 profiles.remove(n);
                 break;
@@ -96,17 +103,18 @@ final class ProfileStore {
         String encrypted = Base64.encodeToString(
                 cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
         profiles.add(0, new Profile(id, address, user, pin, iv, encrypted,
-                wolMac, wolDestination, wolPort));
+                wolMac, wolDestination, wolVpnDestination, wolPort));
         write(profiles);
     }
 
-    synchronized void setWakeOnLan(String id, String mac, String destination, int port) throws Exception {
+    synchronized void setWakeOnLan(String id, String mac, String destination,
+                                   String vpnDestination, int port) throws Exception {
         List<Profile> profiles = list();
         for (int n = 0; n < profiles.size(); n++) {
             Profile old = profiles.get(n);
             if (!old.id.equals(id)) continue;
             profiles.set(n, new Profile(old.id, old.address, old.user, old.pin, old.iv,
-                    old.encryptedPassword, mac, destination, port));
+                    old.encryptedPassword, mac, destination, vpnDestination, port));
             write(profiles);
             return;
         }

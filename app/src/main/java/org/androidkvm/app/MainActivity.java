@@ -6,6 +6,9 @@ import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -97,6 +100,7 @@ public final class MainActivity extends Activity {
     private LinearLayout extraKeys;
     private EditText addressInput, userInput, passwordInput;
     private String trustedAddress = "", trustedFingerprint = "";
+    private String activeAddress = "", activeUser = "";
     private CheckBox rememberInput;
     private ProfileStore profileStore;
     private RemoteScreen screen;
@@ -362,11 +366,13 @@ public final class MainActivity extends Activity {
                 {"TAB", "Tab"}, {"CTRL", "ControlLeft"}, {"ALT", "AltLeft"},
                 {"←", "ArrowLeft"}, {"↓", "ArrowDown"}, {"→", "ArrowRight"}, {"PGDN", "PageDown"}
         }));
-        String[][] functionKeys = new String[12][2];
+        String[][] functionKeys = new String[13][2];
         for (int n = 1; n <= 12; n++) {
             functionKeys[n - 1][0] = "F" + n;
             functionKeys[n - 1][1] = "F" + n;
         }
+        functionKeys[12][0] = "DEL";
+        functionKeys[12][1] = "Delete";
         extraKeys.addView(keyRow(functionKeys));
         consolePage.addView(extraKeys);
 
@@ -573,6 +579,18 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Shut down", (dialog, which) -> setPower(false))
                 .show());
+        ProfileStore.Profile wolProfile = activeWakeProfile();
+        Button wake = button("Wake via WOL", SURFACE, KEY_ACCENT);
+        TextView wakeStatus = text(wolProfile == null
+                ? "Set up WOL on this KVM's saved card to enable it."
+                : (wolProfile.wolVpnDestination.isEmpty()
+                    ? "Send locally and try 255.255.255.255 over VPN when active."
+                    : "Send to both local and VPN/WireGuard destinations."), 12, MUTED);
+        wake.setEnabled(wolProfile != null);
+        wake.setAlpha(wolProfile != null ? 1f : 0.45f);
+        if (wolProfile != null) wake.setOnClickListener(view -> sendWakeOnLan(wolProfile, wake, wakeStatus));
+        content.addView(wake, spaced());
+        content.addView(wakeStatus, spaced());
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Power")
                 .setView(content)
@@ -682,18 +700,9 @@ public final class MainActivity extends Activity {
                 setupWol.setOnClickListener(view -> showWakeOnLanDialog(profile));
                 item.addView(setupWol, spaced());
             } else {
-                LinearLayout wakeActions = row();
-                Button wake = button("Wake PC", SURFACE, KEY_ACCENT);
-                wake.setContentDescription("Wake computer for " + profile.address);
-                wake.setOnClickListener(view -> sendWakeOnLan(profile, wake));
-                wakeActions.addView(wake, new LinearLayout.LayoutParams(0, dp(44), 1));
-                Button wolSettings = button("WOL settings", SURFACE, MUTED);
-                wolSettings.setTextSize(12);
+                Button wolSettings = button("WOL settings", SURFACE, KEY_ACCENT);
                 wolSettings.setOnClickListener(view -> showWakeOnLanDialog(profile));
-                LinearLayout.LayoutParams settingsSize = new LinearLayout.LayoutParams(dp(120), dp(44));
-                settingsSize.leftMargin = dp(8);
-                wakeActions.addView(wolSettings, settingsSize);
-                item.addView(wakeActions, spaced());
+                item.addView(wolSettings, spaced());
             }
             savedPanel.addView(item, spaced());
         }
@@ -706,29 +715,35 @@ public final class MainActivity extends Activity {
         LinearLayout form = column();
         form.setPadding(dp(20), dp(8), dp(20), 0);
         form.addView(text("Use the computer's network MAC address, not the KVM's. "
-                + "The destination must be reachable from this phone.", 13, MUTED));
+                + "The destinations must be reachable from this phone.", 13, MUTED));
         EditText mac = field("Computer MAC, e.g. AA:BB:CC:DD:EE:FF", false);
         mac.setText(profile.wolMac);
         form.addView(mac, spaced());
-        EditText destination = field("Broadcast IP or hostname", false);
+        EditText destination = field("Local broadcast IP or hostname", false);
         destination.setText(profile.wolDestination.isEmpty()
                 ? "255.255.255.255" : profile.wolDestination);
         form.addView(destination, spaced());
+        EditText vpnDestination = field("VPN/WireGuard broadcast or relay (optional)", false);
+        vpnDestination.setText(profile.wolVpnDestination);
+        form.addView(vpnDestination, spaced());
         EditText port = field("UDP port", false);
         port.setInputType(InputType.TYPE_CLASS_NUMBER);
         port.setText(String.valueOf(profile.wolPort));
         form.addView(port, spaced());
-        form.addView(text("Default destination 255.255.255.255 works on the same LAN. "
-                + "For a VPN, use a reachable directed broadcast or WOL relay.", 12, MUTED), spaced());
+        form.addView(text("Local defaults to 255.255.255.255. The Power menu also tries that "
+                + "address over an active VPN; enter a VPN broadcast or relay when needed.",
+                12, MUTED), spaced());
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(form);
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle("Wake-on-LAN · " + profile.address)
-                .setView(form)
+                .setView(scroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", null);
         if (!profile.wolMac.isEmpty()) {
             builder.setNeutralButton("Disable", (dialog, which) -> {
                 try {
-                    profileStore.setWakeOnLan(profile.id, "", "255.255.255.255", 9);
+                    profileStore.setWakeOnLan(profile.id, "", "255.255.255.255", "", 9);
                     renderSavedProfiles();
                 } catch (Exception error) {
                     Toast.makeText(this, "Could not remove WOL settings.", Toast.LENGTH_LONG).show();
@@ -741,8 +756,10 @@ public final class MainActivity extends Activity {
                     try {
                         String normalizedMac = WakeOnLan.canonicalMac(mac.getText().toString());
                         String target = WakeOnLan.destination(destination.getText().toString());
+                        String vpnText = vpnDestination.getText().toString().trim();
+                        String vpnTarget = vpnText.isEmpty() ? "" : WakeOnLan.destination(vpnText);
                         int udpPort = WakeOnLan.port(port.getText().toString());
-                        profileStore.setWakeOnLan(profile.id, normalizedMac, target, udpPort);
+                        profileStore.setWakeOnLan(profile.id, normalizedMac, target, vpnTarget, udpPort);
                         renderSavedProfiles();
                         dialog.dismiss();
                     } catch (IllegalArgumentException error) {
@@ -754,24 +771,51 @@ public final class MainActivity extends Activity {
         dialog.show();
     }
 
-    private void sendWakeOnLan(ProfileStore.Profile profile, Button wakeButton) {
+    private ProfileStore.Profile activeWakeProfile() {
+        for (ProfileStore.Profile profile : profileStore.list()) {
+            if (profile.address.equals(activeAddress) && profile.user.equals(activeUser)
+                    && !profile.wolMac.isEmpty()) return profile;
+        }
+        return null;
+    }
+
+    private void sendWakeOnLan(ProfileStore.Profile profile, Button wakeButton, TextView status) {
         wakeButton.setEnabled(false);
+        status.setText("Sending magic packet…");
         wolIo.execute(() -> {
             try {
-                WakeOnLan.send(profile.wolMac, profile.wolDestination, profile.wolPort);
+                WakeOnLan.SendResult result = WakeOnLan.sendBoth(profile.wolMac,
+                        profile.wolDestination, profile.wolVpnDestination, profile.wolPort,
+                        networkBinder(false), networkBinder(true));
                 runOnUiThread(() -> {
                     wakeButton.setEnabled(true);
-                    Toast.makeText(this, "Magic packet sent to " + profile.wolDestination
-                            + ":" + profile.wolPort + ".", Toast.LENGTH_LONG).show();
+                    status.setText(result.message());
+                    Toast.makeText(this, result.message(), Toast.LENGTH_LONG).show();
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     wakeButton.setEnabled(true);
+                    status.setText("Wake-on-LAN failed: " + error.getMessage());
                     Toast.makeText(this, "Wake-on-LAN failed: " + error.getMessage(),
                             Toast.LENGTH_LONG).show();
                 });
             }
         });
+    }
+
+    private WakeOnLan.SocketBinder networkBinder(boolean vpn) {
+        ConnectivityManager connectivity = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivity == null) return null;
+        for (Network network : connectivity.getAllNetworks()) {
+            NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
+            if (capabilities == null) continue;
+            boolean match = vpn ? capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    : !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
+            if (match) return network::bindSocket;
+        }
+        return null;
     }
 
     private void connectSavedProfile(ProfileStore.Profile profile) {
@@ -814,6 +858,8 @@ public final class MainActivity extends Activity {
                 String finalSaveError = saveError;
                 runOnUiThread(() -> {
                     client = next;
+                    activeAddress = address;
+                    activeUser = user;
                     consoleTitle.setText(address);
                     if (remember) {
                         getPreferences(0).edit().putString("address", address).putString("user", user)
@@ -1411,6 +1457,8 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(textFlush);
         pendingText.setLength(0);
         client = null;
+        activeAddress = "";
+        activeUser = "";
         stopVideo();
         handler.removeCallbacks(powerPoll);
         currentFrame = null;
