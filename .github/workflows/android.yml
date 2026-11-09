@@ -1,0 +1,56 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android SDK platform
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build installable test APK
+        run: ./gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: androidKVM-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Prepare release signing key
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROIDKVM_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROIDKVM_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROIDKVM_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROIDKVM_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" && test -n "$STORE_PASSWORD" && test -n "$KEY_ALIAS" && test -n "$KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/androidkvm-release.jks"
+          echo "ANDROIDKVM_KEYSTORE=$RUNNER_TEMP/androidkvm-release.jks" >> "$GITHUB_ENV"
+      - name: Build signed release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANDROIDKVM_STORE_PASSWORD: ${{ secrets.ANDROIDKVM_STORE_PASSWORD }}
+          ANDROIDKVM_KEY_ALIAS: ${{ secrets.ANDROIDKVM_KEY_ALIAS }}
+          ANDROIDKVM_KEY_PASSWORD: ${{ secrets.ANDROIDKVM_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk "androidKVM-${GITHUB_REF_NAME}.apk"
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "androidKVM-${GITHUB_REF_NAME}.apk" --clobber
