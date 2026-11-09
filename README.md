@@ -12,6 +12,20 @@ translates NanoKVM operations to that API. When the bridge shares a host and
 certificate with NanoKVM, androidKVM can use NanoKVM's H.264 video stream.
 This app contains no TouchKVM or Termux code.
 
+## Screenshots
+
+Captured from androidKVM in an Android emulator using a local demo KVM. The
+remote video is a sample image; no personal device or credentials are shown.
+Your phone's keyboard may look different.
+
+| Add a KVM | Saved KVMs |
+| --- | --- |
+| <img src="docs/screenshots/connect.png" alt="Add a KVM form with the raccoon logo" width="280"> | <img src="docs/screenshots/saved-kvms.png" alt="Saved KVM card and add button" width="280"> |
+
+| Console | Console with keyboard |
+| --- | --- |
+| <img src="docs/screenshots/console.png" alt="Remote console with the keyboard hidden" width="280"> | <img src="docs/screenshots/keyboard.png" alt="Remote console with the Android keyboard and extra keys" width="280"> |
+
 ## Quick start
 
 1. Install the signed release APK from this repository's Releases page.
@@ -20,6 +34,19 @@ This app contains no TouchKVM or Termux code.
    that device. The app remembers the choice for saved KVMs.
 4. Tap a saved KVM to reconnect. Use the keyboard button to show or hide your
    phone's keyboard and its extra keys.
+
+## Updating an installed app
+
+1. On your phone, download the newest signed APK from
+   [GitHub Releases](https://github.com/Sergi095/androidKVM/releases/latest).
+2. Open the downloaded APK and choose **Update**. Android may first ask you to
+   allow installs from your browser or file manager.
+
+Install it over the existing release; uninstalling first removes saved KVMs.
+The package ID and release signing key stay the same, and each release raises
+the version code so Android accepts the update. The debug APK has a different
+signing key and cannot update a release installation. Updates are manual for
+now. See [Android's update rules](https://developer.android.com/google/play/app-updates).
 
 ## Features
 
