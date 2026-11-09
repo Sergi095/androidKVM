@@ -557,7 +557,7 @@ public final class MainActivity extends Activity {
         if (client == null || value.isEmpty()) return;
         pendingText.append(value);
         handler.removeCallbacks(textFlush);
-        handler.postDelayed(textFlush, 120);
+        handler.postDelayed(textFlush, 30);
     }
 
     private void flushTextNow() {

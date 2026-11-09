@@ -1,7 +1,7 @@
 # androidKVM
 
 A small, open-source Android client for PiKVM-compatible devices. It uses the
-documented PiKVM HTTP API and a live MJPEG stream. It also works with a NanoKVM
+PiKVM HTTP and input WebSocket APIs with a live MJPEG stream. It also works with a NanoKVM
 running a PiKVM-compatible bridge that exposes those endpoints. No TouchKVM code
 or Termux code is included.
 
@@ -18,6 +18,9 @@ or Termux code is included.
   above the Android keyboard and hides with it. Tap a modifier first for a shortcut.
 - Type directly with the Android keyboard. The keyboard button in the console
   toolbar shows or hides it, and the remote screen adjusts to the space available.
+- Mouse movement and ordinary keys use the input WebSocket for lower latency.
+  Short text uses it when the KVM reports the US keymap; other text and longer
+  pastes use `/api/hid/print`.
 
 The app does not save the password. It remembers the address, username and
 optional certificate fingerprint on the phone. It requires HTTPS. If Android
@@ -71,6 +74,7 @@ same key. The project has no remote repository configured at this stage.
 ## Protocol references
 
 - [PiKVM HTTP API](https://docs.pikvm.org/api/)
+- [PiKVM input WebSocket API](https://github.com/pikvm/kvmd/blob/master/kvmd/apps/kvmd/api/hid.py)
 - [PiKVM video modes](https://docs.pikvm.org/video/)
 - A PiKVM-compatible NanoKVM bridge can be used as an endpoint when it exposes
   the same login, ATX, HID and MJPEG paths.

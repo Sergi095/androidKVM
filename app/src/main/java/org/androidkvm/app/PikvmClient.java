@@ -1,6 +1,7 @@
 package org.androidkvm.app;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -63,6 +64,8 @@ final class PikvmClient {
     private volatile String cookie;
     private OkHttpClient socketClient;
     private volatile WebSocket events;
+    private volatile boolean eventsReady;
+    private Boolean directTextSupported;
 
     PikvmClient(String address, String fingerprint) throws Exception {
         baseUrl = normalizeAddress(address);
@@ -199,6 +202,7 @@ final class PikvmClient {
                 throw new IOException("PiKVM did not return a login session.");
             }
             cookie = setCookie.split(";", 2)[0];
+            directTextSupported = null;
         } finally {
             connection.disconnect();
         }
@@ -214,6 +218,17 @@ final class PikvmClient {
     }
 
     void sendKey(String code, List<String> modifiers) throws IOException, JSONException {
+        if (eventsReady && events != null) {
+            boolean sent = true;
+            for (String modifier : modifiers) {
+                if (!(sent = sendKeyState(modifier, true))) break;
+            }
+            if (sent) sent = sendKeyState(code, true) && sendKeyState(code, false);
+            for (int n = modifiers.size() - 1; n >= 0; n--) {
+                if (!sendKeyState(modifiers.get(n), false)) sent = false;
+            }
+            if (sent) return;
+        }
         String path = modifiers.isEmpty()
                 ? "/api/hid/events/send_key?key=" + encode(code)
                 : "/api/hid/events/send_shortcut?keys=" + encode(String.join(",", modifiers) + "," + code);
@@ -221,45 +236,146 @@ final class PikvmClient {
     }
 
     void sendText(String text) throws IOException, JSONException {
-        if (!text.isEmpty()) {
-            request("/api/hid/print", "POST", text.getBytes(StandardCharsets.UTF_8),
-                    "text/plain; charset=utf-8");
+        if (text.isEmpty()) return;
+        if (text.length() <= 32 && eventsReady && events != null
+                && isWsText(text) && canSendDirectText()) {
+            boolean sent = true;
+            for (int n = 0; n < text.length() && sent; n++) {
+                char c = text.charAt(n);
+                String code = keyForAscii(c);
+                boolean shift = needsShift(c);
+                if (shift) sent = sendKeyState("ShiftLeft", true);
+                if (sent) sent = sendKeyState(code, true) && sendKeyState(code, false);
+                if (shift && !sendKeyState("ShiftLeft", false)) sent = false;
+            }
+            if (sent) return;
         }
+        request("/api/hid/print", "POST", text.getBytes(StandardCharsets.UTF_8),
+                "text/plain; charset=utf-8");
+    }
+
+    private boolean canSendDirectText() {
+        if (directTextSupported == null) {
+            try {
+                JSONObject result = request("/api/hid/keymaps", "GET", null, null);
+                JSONObject keymaps = result.optJSONObject("keymaps");
+                directTextSupported = keymaps != null && "en-us".equals(keymaps.optString("default"));
+            } catch (IOException | JSONException error) {
+                directTextSupported = false;
+            }
+        }
+        return directTextSupported;
+    }
+
+    private boolean sendKeyState(String code, boolean down) throws JSONException {
+        return sendInputEvent("key", new JSONObject().put("key", code).put("state", down));
+    }
+
+    private static boolean isWsText(String value) {
+        for (int n = 0; n < value.length(); n++) {
+            if (keyForAscii(value.charAt(n)) == null) return false;
+        }
+        return true;
+    }
+
+    private static String keyForAscii(char c) {
+        if (c >= 'a' && c <= 'z') return "Key" + Character.toUpperCase(c);
+        if (c >= 'A' && c <= 'Z') return "Key" + c;
+        if (c >= '0' && c <= '9') return "Digit" + c;
+        switch (c) {
+            case ' ': return "Space";
+            case '-': case '_': return "Minus";
+            case '=': case '+': return "Equal";
+            case '[': case '{': return "BracketLeft";
+            case ']': case '}': return "BracketRight";
+            case '\\': case '|': return "Backslash";
+            case ';': case ':': return "Semicolon";
+            case '\'': case '"': return "Quote";
+            case '`': case '~': return "Backquote";
+            case ',': case '<': return "Comma";
+            case '.': case '>': return "Period";
+            case '/': case '?': return "Slash";
+            case '!': return "Digit1";
+            case '@': return "Digit2";
+            case '#': return "Digit3";
+            case '$': return "Digit4";
+            case '%': return "Digit5";
+            case '^': return "Digit6";
+            case '&': return "Digit7";
+            case '*': return "Digit8";
+            case '(': return "Digit9";
+            case ')': return "Digit0";
+            default: return null;
+        }
+    }
+
+    private static boolean needsShift(char c) {
+        return (c >= 'A' && c <= 'Z') || "!@#$%^&*()_+{}|:\"~<>?".indexOf(c) >= 0;
     }
 
     void moveMouse(float x, float y) throws IOException, JSONException {
         int toX = Math.max(-32768, Math.min(32767, Math.round(x * 65535) - 32768));
         int toY = Math.max(-32768, Math.min(32767, Math.round(y * 65535) - 32768));
+        JSONObject point = new JSONObject().put("x", toX).put("y", toY);
+        if (sendInputEvent("mouse_move", new JSONObject().put("to", point))) return;
         request("/api/hid/events/send_mouse_move?to_x=" + toX + "&to_y=" + toY,
                 "POST", new byte[0], "text/plain");
     }
 
     void moveMouseRelative(int dx, int dy) throws IOException, JSONException {
         while (dx != 0 || dy != 0) {
-            int stepX = Math.max(-127, Math.min(127, dx));
-            int stepY = Math.max(-127, Math.min(127, dy));
-            request("/api/hid/events/send_mouse_relative?delta_x=" + stepX + "&delta_y=" + stepY,
-                    "POST", new byte[0], "text/plain");
-            dx -= stepX;
-            dy -= stepY;
+            JSONArray steps = new JSONArray();
+            int[] xs = new int[128], ys = new int[128];
+            int count = 0;
+            while ((dx != 0 || dy != 0) && count < 128) {
+                int stepX = Math.max(-127, Math.min(127, dx));
+                int stepY = Math.max(-127, Math.min(127, dy));
+                xs[count] = stepX;
+                ys[count] = stepY;
+                steps.put(new JSONObject().put("x", stepX).put("y", stepY));
+                dx -= stepX;
+                dy -= stepY;
+                count++;
+            }
+            if (!sendInputEvent("mouse_relative", new JSONObject().put("delta", steps).put("squash", true))) {
+                for (int n = 0; n < count; n++) {
+                    request("/api/hid/events/send_mouse_relative?delta_x=" + xs[n] + "&delta_y=" + ys[n],
+                            "POST", new byte[0], "text/plain");
+                }
+            }
         }
     }
 
     void mouseClick(String button, int count) throws IOException, JSONException {
         for (int n = 0; n < count; n++) {
-            request("/api/hid/events/send_mouse_button?button=" + encode(button),
-                    "POST", new byte[0], "text/plain");
+            if (!eventsReady || events == null) {
+                request("/api/hid/events/send_mouse_button?button=" + encode(button),
+                        "POST", new byte[0], "text/plain");
+                continue;
+            }
+            mouseButton(button, true);
+            mouseButton(button, false);
         }
     }
 
     void mouseButton(String button, boolean down) throws IOException, JSONException {
+        if (sendInputEvent("mouse_button", new JSONObject().put("button", button).put("state", down))) return;
         request("/api/hid/events/send_mouse_button?button=" + encode(button)
                         + "&state=" + down, "POST", new byte[0], "text/plain");
     }
 
     void mouseWheel(int steps) throws IOException, JSONException {
-        request("/api/hid/events/send_mouse_wheel?delta_y=" + Math.max(-127, Math.min(127, steps)),
+        int value = Math.max(-127, Math.min(127, steps));
+        JSONObject delta = new JSONObject().put("x", 0).put("y", value);
+        if (sendInputEvent("mouse_wheel", new JSONObject().put("delta", delta).put("squash", true))) return;
+        request("/api/hid/events/send_mouse_wheel?delta_x=0&delta_y=" + value,
                 "POST", new byte[0], "text/plain");
+    }
+
+    private boolean sendInputEvent(String kind, JSONObject event) throws JSONException {
+        WebSocket socket = events;
+        if (!eventsReady || socket == null) return false;
+        return socket.send(new JSONObject().put("event_type", kind).put("event", event).toString());
     }
 
     HttpsURLConnection openVideo() throws IOException {
@@ -287,7 +403,18 @@ final class PikvmClient {
                 .url(baseUrl + "/api/ws")
                 .header("Cookie", cookie)
                 .build();
+        eventsReady = false;
         events = socketClient.newWebSocket(request, new WebSocketListener() {
+            @Override public void onMessage(WebSocket socket, String message) {
+                synchronized (PikvmClient.this) {
+                    if (events == socket) eventsReady = true;
+                }
+            }
+            @Override public void onClosing(WebSocket socket, int code, String reason) {
+                synchronized (PikvmClient.this) {
+                    if (events == socket) eventsReady = false;
+                }
+            }
             @Override public void onFailure(WebSocket socket, Throwable error, Response response) {
                 clearEvents(socket);
             }
@@ -298,11 +425,15 @@ final class PikvmClient {
     }
 
     private synchronized void clearEvents(WebSocket socket) {
-        if (events == socket) events = null;
+        if (events == socket) {
+            eventsReady = false;
+            events = null;
+        }
     }
 
     synchronized void stopEvents() {
         WebSocket active = events;
+        eventsReady = false;
         events = null;
         if (active != null) active.close(1000, "App paused");
     }
