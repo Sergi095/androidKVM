@@ -9,6 +9,8 @@ or Termux code is included.
 
 - Log in with the KVM web account. Save several KVM profiles and tap one to
   reconnect; saved passwords are encrypted with a key in Android Keystore.
+- Pick a KVM from a compact device list or add a new one. The dark console
+  keeps the video prominent, with quick keyboard, mouse-mode, and power controls.
 - View the live screen in a console that expands when the Android keyboard is hidden.
 - On a NanoKVM bridge running on the same host as NanoKVM, use its native H.264
   Direct stream with Android's video decoder when the certificate pin matches.
@@ -16,6 +18,7 @@ or Termux code is included.
 - Move the mouse by touching or dragging on the screen. Tap for left click,
   double tap for double click, long press then move for left-button drag,
   two-finger tap for right click, and two-finger vertical swipe to scroll.
+  The mouse control button can switch between direct touch and relative trackpad mode.
 - See the reported ATX power LED state and send On or soft Off when ATX control is available.
 - Use a Termux-style extra-key bar with Escape, Tab, Ctrl, Alt, arrows,
   Home, End, Page Up, Page Down, and a swipeable F1–F12 row. It sits directly
@@ -93,3 +96,4 @@ same key. The project has no remote repository configured at this stage.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+The raccoon app icon is an original vector included under the same license.

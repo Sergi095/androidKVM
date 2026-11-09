@@ -36,6 +36,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -55,12 +56,13 @@ import javax.net.ssl.SSLPeerUnverifiedException;
 
 /** Minimal native Android console for PiKVM-compatible devices. */
 public final class MainActivity extends Activity {
-    private static final int BG = Color.rgb(16, 24, 40);
+    private static final int BG = Color.rgb(8, 16, 31);
     private static final int CONSOLE_BG = Color.BLACK;
     private static final int PANEL = Color.rgb(27, 39, 59);
+    private static final int SURFACE = Color.rgb(39, 54, 74);
     private static final int TEXT = Color.rgb(245, 249, 251);
-    private static final int MUTED = Color.rgb(170, 188, 200);
-    private static final int ACCENT = Color.rgb(76, 205, 184);
+    private static final int MUTED = Color.rgb(160, 178, 195);
+    private static final int ACCENT = Color.rgb(41, 197, 239);
     private static final int DANGER = Color.rgb(182, 77, 82);
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -89,8 +91,10 @@ public final class MainActivity extends Activity {
     private TextureView fastVideo;
     private int videoWidth, videoHeight;
     private RemoteInput remoteInput;
-    private TextView message, videoStatus, powerStatus;
-    private Button loginButton, onButton, offButton;
+    private TextView message, videoStatus, powerStatus, consoleTitle, sectionTitle;
+    private Button loginButton, onButton, offButton, addKvmButton, closeFormButton;
+    private boolean trackpadMode;
+    private float pointerX = 0.5f, pointerY = 0.5f;
     private int consoleTopInset, consoleBottomInset;
 
     private final Runnable powerPoll = new Runnable() {
@@ -135,31 +139,64 @@ public final class MainActivity extends Activity {
         loginPage.setFillViewport(true);
         loginPage.setBackgroundColor(BG);
         LinearLayout root = column();
-        root.setPadding(dp(16), dp(12), dp(16), dp(24));
+        root.setPadding(dp(18), dp(12), dp(18), dp(24));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             int top = Build.VERSION.SDK_INT >= 30
                     ? insets.getInsets(WindowInsets.Type.systemBars()).top : insets.getSystemWindowInsetTop();
             int bottom = Build.VERSION.SDK_INT >= 30
                     ? insets.getInsets(WindowInsets.Type.systemBars()).bottom : insets.getSystemWindowInsetBottom();
-            view.setPadding(dp(16), dp(12) + top, dp(16), dp(24) + bottom);
+            view.setPadding(dp(18), dp(12) + top, dp(18), dp(24) + bottom);
             return insets;
         });
         loginPage.addView(root);
         setContentView(loginPage);
 
-        TextView title = text("androidKVM", 25, TEXT);
+        LinearLayout brand = row();
+        ImageView mascot = new ImageView(this);
+        mascot.setImageResource(R.drawable.ic_launcher);
+        mascot.setContentDescription("androidKVM raccoon logo");
+        brand.addView(mascot, new LinearLayout.LayoutParams(dp(54), dp(54)));
+        LinearLayout brandText = column();
+        brandText.setPadding(dp(10), 0, 0, 0);
+        TextView title = text("androidKVM", 24, TEXT);
         title.setTypeface(null, 1);
-        root.addView(title);
-        root.addView(text("PiKVM-compatible console", 14, MUTED));
+        brandText.addView(title);
+        brandText.addView(text("Your KVMs, in your pocket", 12, MUTED));
+        brand.addView(brandText);
+        root.addView(brand);
+        sectionTitle = text("MY KVMS", 12, ACCENT);
+        sectionTitle.setTypeface(null, 1);
+        root.addView(sectionTitle, spaced());
 
-        savedPanel = panel();
+        savedPanel = column();
         root.addView(savedPanel, spaced());
-        renderSavedProfiles();
+        addKvmButton = button("＋  Add KVM", PANEL, ACCENT);
+        addKvmButton.setOnClickListener(view -> {
+            loginPanel.setVisibility(View.VISIBLE);
+            addKvmButton.setVisibility(View.GONE);
+        });
+        root.addView(addKvmButton, spaced());
 
         loginPanel = panel();
         root.addView(loginPanel, spaced());
-        loginPanel.addView(text("Connect", 20, TEXT));
-        loginPanel.addView(text("Use your KVM web account.", 13, MUTED));
+        LinearLayout formHeader = row();
+        TextView formTitle = text("Connect a KVM", 19, TEXT);
+        formTitle.setTypeface(null, 1);
+        formHeader.addView(formTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        Button closeForm = compactButton("×");
+        closeFormButton = closeForm;
+        closeForm.setContentDescription("Close connection form");
+        closeForm.setOnClickListener(view -> {
+            if (!profileStore.list().isEmpty()) {
+                loginPanel.setVisibility(View.GONE);
+                addKvmButton.setVisibility(View.VISIBLE);
+            }
+        });
+        formHeader.addView(closeForm, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        closeForm.setBackground(rounded(PANEL));
+        closeForm.setTextColor(MUTED);
+        loginPanel.addView(formHeader);
+        loginPanel.addView(text("Use the login from your KVM web page.", 13, MUTED));
         addressInput = field("PiKVM address, e.g. pikvm.local", false);
         userInput = field("Username", false);
         passwordInput = field("Password", true);
@@ -175,7 +212,7 @@ public final class MainActivity extends Activity {
         rememberInput.setTextColor(TEXT);
         rememberInput.setChecked(true);
         loginPanel.addView(rememberInput, spaced());
-        loginPanel.addView(text("Saved passwords are encrypted with Android Keystore. If you use 2FA, enter a fresh code before reconnecting. Compare an untrusted certificate fingerprint with your KVM before accepting it.", 12, MUTED), spaced());
+        loginPanel.addView(text("Passwords are encrypted on this phone. Verify untrusted certificates. For 2FA, use a fresh code.", 12, MUTED), spaced());
         loginButton = button("Connect", ACCENT, BG);
         loginButton.setOnClickListener(view -> login());
         loginPanel.addView(loginButton, spaced());
@@ -183,6 +220,7 @@ public final class MainActivity extends Activity {
         message = text("", 13, MUTED);
         message.setMinHeight(dp(30));
         root.addView(message, spaced());
+        renderSavedProfiles();
 
         consolePage = column();
         consolePage.setBackgroundColor(CONSOLE_BG);
@@ -198,24 +236,35 @@ public final class MainActivity extends Activity {
         });
         consolePage.getViewTreeObserver().addOnGlobalLayoutListener(this::updateConsoleKeyboardInset);
         LinearLayout toolbar = row();
-        toolbar.setPadding(dp(8), 0, dp(8), 0);
+        toolbar.setPadding(dp(6), 0, dp(6), 0);
         toolbar.setBackgroundColor(CONSOLE_BG);
-        TextView name = text("androidKVM", 14, TEXT);
-        name.setTypeface(null, 1);
-        toolbar.addView(name, new LinearLayout.LayoutParams(0, dp(42), 1));
+        Button disconnect = compactButton("‹");
+        disconnect.setTextSize(29);
+        disconnect.setContentDescription("Disconnect and choose another KVM");
+        disconnect.setOnClickListener(view -> logout());
+        toolbar.addView(disconnect, new LinearLayout.LayoutParams(dp(42), dp(46)));
+        consoleTitle = text("KVM console", 13, TEXT);
+        consoleTitle.setTypeface(null, 1);
+        consoleTitle.setSingleLine(true);
+        consoleTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        consoleTitle.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.addView(consoleTitle, new LinearLayout.LayoutParams(0, dp(46), 1));
         remoteInput = new RemoteInput(this);
         toolbar.addView(remoteInput, new LinearLayout.LayoutParams(dp(1), dp(1)));
+        Button mouse = compactButton("◎");
+        mouse.setTextSize(24);
+        mouse.setContentDescription("Choose touch or trackpad mouse mode");
+        mouse.setOnClickListener(view -> showMouseModeDialog());
+        toolbar.addView(mouse, new LinearLayout.LayoutParams(dp(42), dp(46)));
         Button keyboard = compactButton("⌨");
         keyboard.setContentDescription("Show or hide Android keyboard");
         keyboard.setOnClickListener(view -> toggleKeyboard());
-        toolbar.addView(keyboard, new LinearLayout.LayoutParams(dp(48), dp(40)));
-        Button power = compactButton("Power");
+        toolbar.addView(keyboard, new LinearLayout.LayoutParams(dp(42), dp(46)));
+        Button power = compactButton("⏻");
+        power.setTextSize(23);
+        power.setContentDescription("Power controls");
         power.setOnClickListener(view -> showPowerDialog());
-        toolbar.addView(power, new LinearLayout.LayoutParams(dp(68), dp(40)));
-        Button disconnect = compactButton("KVMs");
-        disconnect.setContentDescription("Disconnect and choose another KVM");
-        disconnect.setOnClickListener(view -> logout());
-        toolbar.addView(disconnect, new LinearLayout.LayoutParams(dp(64), dp(40)));
+        toolbar.addView(power, new LinearLayout.LayoutParams(dp(42), dp(46)));
         consolePage.addView(toolbar);
 
         videoArea = new FrameLayout(this);
@@ -246,7 +295,8 @@ public final class MainActivity extends Activity {
         consolePage.addView(videoStatus, new LinearLayout.LayoutParams(-1, dp(18)));
 
         extraKeys = column();
-        extraKeys.setBackgroundColor(CONSOLE_BG);
+        extraKeys.setBackgroundColor(BG);
+        extraKeys.setPadding(dp(3), dp(4), dp(3), dp(3));
         extraKeys.addView(compactKeyRow(new String[][]{
                 {"ESC", "Escape"}, {"/", "Slash"}, {"−", "Minus"},
                 {"HOME", "Home"}, {"↑", "ArrowUp"}, {"END", "End"}, {"PGUP", "PageUp"}
@@ -300,6 +350,7 @@ public final class MainActivity extends Activity {
             String label = item[0], code = item[1];
             Button key = compactButton(label);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(54), dp(43));
+            params.rightMargin = dp(3);
             row.addView(key, params);
             bindKey(key, label, code);
         }
@@ -312,7 +363,9 @@ public final class MainActivity extends Activity {
         for (String[] item : keys) {
             String label = item[0], code = item[1];
             Button key = compactButton(label);
-            row.addView(key, new LinearLayout.LayoutParams(0, dp(43), 1));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(43), 1);
+            params.rightMargin = dp(3);
+            row.addView(key, params);
             bindKey(key, label, code);
         }
         return row;
@@ -332,6 +385,7 @@ public final class MainActivity extends Activity {
     }
 
     private void bindKey(Button key, String label, String code) {
+        key.setBackground(rounded(SURFACE));
         if (code.equals("ControlLeft") || code.equals("AltLeft") || code.equals("ShiftLeft")) {
             modifierButtons.add(key);
             key.setTag(new String[]{label, code});
@@ -392,6 +446,21 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void showMouseModeDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Mouse control")
+                .setSingleChoiceItems(new String[]{"Touch screen", "Trackpad"}, trackpadMode ? 1 : 0,
+                        (dialog, choice) -> {
+                            trackpadMode = choice == 1;
+                            screen.resetGesture();
+                            Toast.makeText(this, trackpadMode ? "Trackpad mode" : "Touch mode",
+                                    Toast.LENGTH_SHORT).show();
+                            dialog.dismiss();
+                        })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void resetKeyboardComposition() {
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.restartInput(remoteInput);
@@ -400,19 +469,35 @@ public final class MainActivity extends Activity {
     private void renderSavedProfiles() {
         savedPanel.removeAllViews();
         List<ProfileStore.Profile> profiles = profileStore.list();
+        if (sectionTitle != null) sectionTitle.setText(profiles.isEmpty() ? "ADD YOUR FIRST KVM" : "MY KVMS");
         savedPanel.setVisibility(profiles.isEmpty() ? View.GONE : View.VISIBLE);
-        if (profiles.isEmpty()) return;
-        savedPanel.addView(text("Saved KVMs", 18, TEXT));
         for (ProfileStore.Profile profile : profiles) {
-            LinearLayout item = row();
-            Button connect = button(profile.address + "  ·  " + profile.user, Color.rgb(45, 59, 78), TEXT);
+            LinearLayout item = panel();
+            LinearLayout content = row();
+            TextView device = text("▣", 27, ACCENT);
+            device.setGravity(Gravity.CENTER);
+            device.setBackground(rounded(BG));
+            content.addView(device, new LinearLayout.LayoutParams(dp(46), dp(46)));
+            LinearLayout detail = column();
+            detail.setPadding(dp(12), 0, 0, 0);
+            TextView address = text(profile.address, 15, TEXT);
+            address.setTypeface(null, 1);
+            address.setSingleLine(true);
+            address.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            detail.addView(address);
+            detail.addView(text(profile.user + "  ·  Saved connection", 12, MUTED));
+            content.addView(detail, new LinearLayout.LayoutParams(0, -2, 1));
+            item.addView(content);
+            LinearLayout actions = row();
+            Button connect = button("Connect  →", ACCENT, BG);
             connect.setOnClickListener(view -> connectSavedProfile(profile));
-            item.addView(connect, new LinearLayout.LayoutParams(0, dp(52), 1));
-            Button remove = button("×", DANGER, TEXT);
+            actions.addView(connect, new LinearLayout.LayoutParams(0, dp(44), 1));
+            Button remove = button("Remove", SURFACE, MUTED);
+            remove.setTextSize(12);
             remove.setContentDescription("Remove saved KVM " + profile.address);
-            LinearLayout.LayoutParams removeSize = new LinearLayout.LayoutParams(dp(52), dp(52));
+            LinearLayout.LayoutParams removeSize = new LinearLayout.LayoutParams(dp(84), dp(44));
             removeSize.leftMargin = dp(8);
-            item.addView(remove, removeSize);
+            actions.addView(remove, removeSize);
             remove.setOnClickListener(view -> new AlertDialog.Builder(this)
                     .setTitle("Remove saved KVM?")
                     .setMessage(profile.address + " (" + profile.user + ")")
@@ -426,8 +511,12 @@ public final class MainActivity extends Activity {
                             showMessage("Could not remove saved KVM.");
                         }
                     }).show());
+            item.addView(actions, spaced());
             savedPanel.addView(item, spaced());
         }
+        if (loginPanel != null) loginPanel.setVisibility(profiles.isEmpty() ? View.VISIBLE : View.GONE);
+        if (addKvmButton != null) addKvmButton.setVisibility(profiles.isEmpty() ? View.GONE : View.VISIBLE);
+        if (closeFormButton != null) closeFormButton.setVisibility(profiles.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void connectSavedProfile(ProfileStore.Profile profile) {
@@ -469,6 +558,7 @@ public final class MainActivity extends Activity {
                 String finalSaveError = saveError;
                 runOnUiThread(() -> {
                     client = next;
+                    consoleTitle.setText(address);
                     if (remember) {
                         getPreferences(0).edit().putString("address", address).putString("user", user)
                                 .putString("pin", pin).apply();
@@ -691,7 +781,7 @@ public final class MainActivity extends Activity {
             boolean active = modifiers.contains(tag[1]);
             button.setText(tag[0]);
             if (active) button.setBackground(rounded(ACCENT));
-            else button.setBackgroundColor(CONSOLE_BG);
+            else button.setBackground(rounded(SURFACE));
             button.setTextColor(active ? BG : TEXT);
         }
     }
@@ -781,6 +871,23 @@ public final class MainActivity extends Activity {
     private void queueMouseMove(float x, float y) {
         PointF point = screenPoint(x, y);
         if (point == null || client == null) return;
+        pointerX = point.x;
+        pointerY = point.y;
+        enqueueMouseMove(point);
+    }
+
+    private void queueRelativeMouseMove(float dx, float dy) {
+        if (client == null || videoWidth <= 0 || videoHeight <= 0) return;
+        float scale = Math.min((float) screen.getWidth() / videoWidth,
+                (float) screen.getHeight() / videoHeight);
+        float width = videoWidth * scale, height = videoHeight * scale;
+        if (width <= 0 || height <= 0) return;
+        pointerX = Math.max(0f, Math.min(1f, pointerX + dx * 1.35f / width));
+        pointerY = Math.max(0f, Math.min(1f, pointerY + dy * 1.35f / height));
+        enqueueMouseMove(new PointF(pointerX, pointerY));
+    }
+
+    private void enqueueMouseMove(PointF point) {
         pendingMove.set(point);
         if (moveQueued.compareAndSet(false, true)) mouseIo.execute(this::drainMouseMoves);
     }
@@ -916,6 +1023,7 @@ public final class MainActivity extends Activity {
         private Runnable longPress;
         private Runnable pendingClick;
         private float startX, startY;
+        private float lastX, lastY;
         private float lastTapX, lastTapY, scrollY;
         private long lastTapAt;
         private boolean moved, multiTouch, scrolled, dragging;
@@ -938,9 +1046,11 @@ public final class MainActivity extends Activity {
                 case MotionEvent.ACTION_DOWN:
                     startX = event.getX();
                     startY = event.getY();
+                    lastX = startX;
+                    lastY = startY;
                     moved = multiTouch = scrolled = dragging = false;
                     resetKeyboardComposition();
-                    queueMouseMove(startX, startY);
+                    if (!trackpadMode) queueMouseMove(startX, startY);
                     longPress = () -> {
                         if (!moved && !multiTouch && client != null) {
                             dragging = true;
@@ -972,14 +1082,20 @@ public final class MainActivity extends Activity {
                             moved = true;
                             if (!dragging) cancelRemoteLongPress();
                         }
-                        queueMouseMove(event.getX(), event.getY());
+                        if (trackpadMode) queueRelativeMouseMove(event.getX() - lastX, event.getY() - lastY);
+                        else queueMouseMove(event.getX(), event.getY());
+                        lastX = event.getX();
+                        lastY = event.getY();
                     }
                     return true;
                 case MotionEvent.ACTION_POINTER_UP:
                     return true;
                 case MotionEvent.ACTION_UP:
                     cancelRemoteLongPress();
-                    if (!multiTouch && moved) queueMouseMove(event.getX(), event.getY());
+                    if (!multiTouch && moved) {
+                        if (trackpadMode) queueRelativeMouseMove(event.getX() - lastX, event.getY() - lastY);
+                        else queueMouseMove(event.getX(), event.getY());
+                    }
                     if (dragging) {
                         mouseButton("left", false);
                     } else if (multiTouch) {
@@ -1092,7 +1208,7 @@ public final class MainActivity extends Activity {
         view.setTextSize(15);
         view.setHint(hint);
         view.setPadding(dp(12), 0, dp(12), 0);
-        view.setBackground(rounded(Color.rgb(45, 59, 78)));
+        view.setBackground(rounded(SURFACE));
         view.setInputType(password ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
                 : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         view.setMinHeight(dp(48));
