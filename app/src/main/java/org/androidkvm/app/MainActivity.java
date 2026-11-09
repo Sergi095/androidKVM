@@ -84,7 +84,8 @@ public final class MainActivity extends Activity {
     private LinearLayout loginPanel;
     private LinearLayout savedPanel;
     private LinearLayout extraKeys;
-    private EditText addressInput, userInput, passwordInput, pinInput;
+    private EditText addressInput, userInput, passwordInput;
+    private String trustedAddress = "", trustedFingerprint = "";
     private CheckBox rememberInput;
     private ProfileStore profileStore;
     private RemoteScreen screen;
@@ -201,11 +202,11 @@ public final class MainActivity extends Activity {
         addressInput = field("PiKVM address, e.g. pikvm.local", false);
         userInput = field("Username", false);
         passwordInput = field("Password", true);
-        pinInput = field("SHA-256 certificate fingerprint (optional)", false);
-        addressInput.setText(getPreferences(0).getString("address", ""));
+        trustedAddress = getPreferences(0).getString("address", "");
+        trustedFingerprint = getPreferences(0).getString("pin", "");
+        addressInput.setText(trustedAddress);
         userInput.setText(getPreferences(0).getString("user", ""));
-        pinInput.setText(getPreferences(0).getString("pin", ""));
-        for (EditText input : new EditText[]{addressInput, userInput, passwordInput, pinInput}) {
+        for (EditText input : new EditText[]{addressInput, userInput, passwordInput}) {
             loginPanel.addView(input, spaced());
         }
         rememberInput = new CheckBox(this);
@@ -213,7 +214,7 @@ public final class MainActivity extends Activity {
         rememberInput.setTextColor(TEXT);
         rememberInput.setChecked(true);
         loginPanel.addView(rememberInput, spaced());
-        loginPanel.addView(text("Passwords are encrypted on this phone. Verify untrusted certificates. For 2FA, use a fresh code.", 12, MUTED), spaced());
+        loginPanel.addView(text("Passwords and trusted certificates stay on this phone. For 2FA, use a fresh code.", 12, MUTED), spaced());
         loginButton = button("Connect", ACCENT, BG);
         loginButton.setOnClickListener(view -> login());
         loginPanel.addView(loginButton, spaced());
@@ -501,6 +502,11 @@ public final class MainActivity extends Activity {
                     .setPositiveButton("Remove", (dialog, which) -> {
                         try {
                             profileStore.remove(profile.id);
+                            if (profile.address.equals(trustedAddress)) {
+                                trustedAddress = "";
+                                trustedFingerprint = "";
+                                getPreferences(0).edit().remove("pin").apply();
+                            }
                             passwordInput.setText("");
                             renderSavedProfiles();
                         } catch (Exception error) {
@@ -518,7 +524,8 @@ public final class MainActivity extends Activity {
     private void connectSavedProfile(ProfileStore.Profile profile) {
         addressInput.setText(profile.address);
         userInput.setText(profile.user);
-        pinInput.setText(profile.pin);
+        trustedAddress = profile.address;
+        trustedFingerprint = profile.pin;
         try {
             passwordInput.setText(profileStore.password(profile));
             rememberInput.setChecked(true);
@@ -533,7 +540,7 @@ public final class MainActivity extends Activity {
         String address = addressInput.getText().toString().trim();
         String user = userInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
-        String pin = pinInput.getText().toString().trim();
+        String pin = address.equals(trustedAddress) ? trustedFingerprint : "";
         boolean remember = rememberInput.isChecked();
         if (address.isEmpty() || user.isEmpty() || password.isEmpty()) {
             showMessage("Enter the KVM address, username, and password.");
@@ -578,16 +585,9 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception error) {
                 if (certificateError(error)) {
-                    if (!pin.isEmpty()) {
-                        runOnUiThread(() -> {
-                            loginButton.setEnabled(true);
-                            showMessage("The saved certificate fingerprint did not validate. Check it before reconnecting.");
-                        });
-                        return;
-                    }
                     try {
                         String fingerprint = PikvmClient.certificateFingerprint(address);
-                        runOnUiThread(() -> showCertificateDialog(address, fingerprint));
+                        runOnUiThread(() -> showCertificateDialog(address, fingerprint, !pin.isEmpty()));
                         return;
                     } catch (Exception inspectionError) {
                         // Show the original connection failure below.
@@ -609,17 +609,19 @@ public final class MainActivity extends Activity {
         return false;
     }
 
-    private void showCertificateDialog(String address, String fingerprint) {
+    private void showCertificateDialog(String address, String fingerprint, boolean changed) {
         loginButton.setEnabled(true);
-        showMessage("Certificate confirmation required");
+        showMessage("Trust confirmation required");
         new AlertDialog.Builder(this)
-                .setTitle("Verify KVM certificate")
-                .setMessage("Android does not trust the certificate presented by " + address
-                        + ". Compare this SHA-256 fingerprint with your KVM before continuing:\n\n"
-                        + fingerprint)
+                .setTitle(changed ? "KVM certificate changed" : "Trust this KVM?")
+                .setMessage(changed
+                        ? "The certificate for " + address + " changed since you last trusted it. Continue only if you expect this change."
+                        : "Android does not recognize the certificate for " + address
+                                + ". Trust this KVM to connect? Your choice is remembered when you save the KVM.")
                 .setNegativeButton("Cancel", (dialog, which) -> showMessage("Connection cancelled"))
                 .setPositiveButton("Trust and connect", (dialog, which) -> {
-                    pinInput.setText(fingerprint);
+                    trustedAddress = address;
+                    trustedFingerprint = fingerprint;
                     login();
                 })
                 .show();

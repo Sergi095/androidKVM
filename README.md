@@ -1,9 +1,25 @@
 # androidKVM
 
-A small, open-source Android client for PiKVM-compatible devices. It uses the
-PiKVM HTTP and input WebSocket APIs with live video. It also works with a NanoKVM
-running a PiKVM-compatible bridge that exposes those endpoints. No TouchKVM code
-or Termux code is included.
+androidKVM is a free, open-source Android remote console for PiKVM-compatible
+devices. It shows the remote screen, sends touch or trackpad mouse input, types
+through the Android keyboard with an extra key bar, and offers ATX power controls.
+You can save multiple KVMs and reconnect with one tap. It connects directly to
+your KVM without an app account, ads, or paid features.
+
+PiKVM works through its own API. Sipeed NanoKVM can be used with the separate
+[NanoKVM PiKVM bridge](https://github.com/Sergi095/nanokvm-pikvm-bridge), which
+translates NanoKVM operations to that API. When the bridge shares a host and
+certificate with NanoKVM, androidKVM can use NanoKVM's H.264 video stream.
+This app contains no TouchKVM or Termux code.
+
+## Quick start
+
+1. Install the signed release APK from this repository's Releases page.
+2. Add your KVM hostname or HTTPS address and enter its web login.
+3. If prompted, trust the KVM certificate only when you expect to connect to
+   that device. The app remembers the choice for saved KVMs.
+4. Tap a saved KVM to reconnect. Use the keyboard button to show or hide your
+   phone's keyboard and its extra keys.
 
 ## Features
 
@@ -30,16 +46,13 @@ or Termux code is included.
   pastes use `/api/hid/print`.
 
 The app saves a password only when "Save this KVM and password on this phone" is
-checked. Saved profiles contain the address, username, certificate fingerprint,
+checked. Saved profiles contain the address, username, certificate trust record,
 and encrypted password. The encryption key stays in Android Keystore, and Android
-backup is disabled for the app. It requires HTTPS. If Android
-does not trust the KVM certificate, the app shows its SHA-256 fingerprint and
-waits for confirmation before sending credentials. Compare that fingerprint
-through a trusted channel. For example, on the KVM itself:
-
-```sh
-openssl x509 -in /path/to/server.crt -noout -fingerprint -sha256
-```
+backup is disabled for the app. It requires HTTPS. If Android does not recognize
+a KVM certificate, the app asks whether to trust that KVM before sending login
+credentials. Accepting pins that exact certificate in the background. Saved KVMs
+remember the choice; a changed certificate prompts again. Only trust a KVM you
+expect to reach at that address.
 
 For PiKVM with two-factor authentication, append the current one-time code to
 the password during login, as specified by the PiKVM API.
@@ -71,8 +84,8 @@ before relying on those buttons.
 ## GitHub Actions releases
 
 The workflow builds a debug APK on pushes and manual runs. A `v*` tag also
-builds a signed release APK and uploads it to a GitHub Release. Before using
-tagged releases, configure these repository secrets:
+builds a signed release APK and uploads it to a GitHub Release. Tagged releases
+use these repository secrets:
 
 | Secret | Value |
 | --- | --- |
@@ -82,7 +95,8 @@ tagged releases, configure these repository secrets:
 | `ANDROIDKVM_KEY_PASSWORD` | Key password |
 
 Keep the release keystore safe. Android updates require APKs signed with the
-same key. The project has no remote repository configured at this stage.
+same key. The GitHub repository is private; downloading a release requires access
+to it.
 
 ## Protocol references
 
@@ -90,8 +104,8 @@ same key. The project has no remote repository configured at this stage.
 - [PiKVM input WebSocket API](https://github.com/pikvm/kvmd/blob/master/kvmd/apps/kvmd/api/hid.py)
 - [PiKVM video modes](https://docs.pikvm.org/video/)
 - [NanoKVM Direct H.264 stream](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/desktop/screen/direct.worker.ts)
-- A PiKVM-compatible NanoKVM bridge can be used as an endpoint when it exposes
-  the same login, ATX, HID and MJPEG paths.
+- [NanoKVM PiKVM bridge](https://github.com/Sergi095/nanokvm-pikvm-bridge)
+  translates the NanoKVM API to PiKVM-compatible login, ATX, HID, and video paths.
 
 ## License
 
