@@ -9,13 +9,13 @@ or Termux code is included.
 
 - Log in with the KVM web account; the app keeps the session cookie in memory.
 - View the live screen in a console that expands when the Android keyboard is hidden.
-- Move the mouse directly by touching or dragging on the screen. Tap for left click,
+- Move the mouse by touching or dragging on the screen. Tap for left click,
   double tap for double click, long press then move for left-button drag,
   two-finger tap for right click, and two-finger vertical swipe to scroll.
 - See the reported ATX power LED state and send On or soft Off when ATX control is available.
 - Use a Termux-style extra-key bar with Escape, Tab, Ctrl, Alt, arrows,
-  Home, End, Page Up, Page Down, and a swipeable F1–F12 row. Tap a modifier
-  first for a shortcut.
+  Home, End, Page Up, Page Down, and a swipeable F1–F12 row. It sits directly
+  above the Android keyboard and hides with it. Tap a modifier first for a shortcut.
 - Type directly with the Android keyboard. The keyboard button in the console
   toolbar shows or hides it, and the remote screen adjusts to the space available.
 

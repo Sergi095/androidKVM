@@ -234,6 +234,17 @@ final class PikvmClient {
                 "POST", new byte[0], "text/plain");
     }
 
+    void moveMouseRelative(int dx, int dy) throws IOException, JSONException {
+        while (dx != 0 || dy != 0) {
+            int stepX = Math.max(-127, Math.min(127, dx));
+            int stepY = Math.max(-127, Math.min(127, dy));
+            request("/api/hid/events/send_mouse_relative?delta_x=" + stepX + "&delta_y=" + stepY,
+                    "POST", new byte[0], "text/plain");
+            dx -= stepX;
+            dy -= stepY;
+        }
+    }
+
     void mouseClick(String button, int count) throws IOException, JSONException {
         for (int n = 0; n < count; n++) {
             request("/api/hid/events/send_mouse_button?button=" + encode(button),

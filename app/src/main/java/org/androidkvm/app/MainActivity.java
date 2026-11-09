@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
@@ -38,6 +39,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLHandshakeException;
@@ -59,6 +61,8 @@ public final class MainActivity extends Activity {
     private final StringBuilder pendingText = new StringBuilder();
     private final Runnable textFlush = this::flushTextNow;
     private final AtomicReference<PointF> pendingMove = new AtomicReference<>();
+    private final AtomicInteger pendingMouseDx = new AtomicInteger();
+    private final AtomicInteger pendingMouseDy = new AtomicInteger();
     private final AtomicBoolean moveQueued = new AtomicBoolean();
     private final LinkedHashSet<String> modifiers = new LinkedHashSet<>();
     private final List<Button> modifierButtons = new ArrayList<>();
@@ -68,11 +72,13 @@ public final class MainActivity extends Activity {
     private ScrollView loginPage;
     private LinearLayout consolePage;
     private LinearLayout loginPanel;
+    private LinearLayout extraKeys;
     private EditText addressInput, userInput, passwordInput, pinInput;
     private RemoteScreen screen;
     private RemoteInput remoteInput;
     private TextView message, videoStatus, powerStatus;
     private Button loginButton, onButton, offButton;
+    private int consoleTopInset, consoleBottomInset;
 
     private final Runnable powerPoll = new Runnable() {
         @Override public void run() {
@@ -159,19 +165,23 @@ public final class MainActivity extends Activity {
         consolePage.setBackgroundColor(CONSOLE_BG);
         consolePage.setPadding(0, 0, 0, 0);
         consolePage.setOnApplyWindowInsetsListener((view, insets) -> {
-            int top = Build.VERSION.SDK_INT >= 30
+            consoleTopInset = Build.VERSION.SDK_INT >= 30
                     ? insets.getInsets(WindowInsets.Type.systemBars()).top : insets.getSystemWindowInsetTop();
-            int bottom = Build.VERSION.SDK_INT >= 30
+            consoleBottomInset = Build.VERSION.SDK_INT >= 30
                     ? insets.getInsets(WindowInsets.Type.systemBars()).bottom : insets.getSystemWindowInsetBottom();
-            view.setPadding(0, top, 0, bottom);
+            view.setPadding(0, consoleTopInset, 0, consoleBottomInset);
+            view.post(this::updateConsoleKeyboardInset);
             return insets;
         });
+        consolePage.getViewTreeObserver().addOnGlobalLayoutListener(this::updateConsoleKeyboardInset);
         LinearLayout toolbar = row();
         toolbar.setPadding(dp(8), 0, dp(8), 0);
         toolbar.setBackgroundColor(CONSOLE_BG);
         TextView name = text("androidKVM", 14, TEXT);
         name.setTypeface(null, 1);
         toolbar.addView(name, new LinearLayout.LayoutParams(0, dp(42), 1));
+        remoteInput = new RemoteInput(this);
+        toolbar.addView(remoteInput, new LinearLayout.LayoutParams(dp(1), dp(1)));
         Button keyboard = compactButton("⌨");
         keyboard.setContentDescription("Show or hide Android keyboard");
         keyboard.setOnClickListener(view -> toggleKeyboard());
@@ -195,7 +205,7 @@ public final class MainActivity extends Activity {
         videoStatus.setPadding(dp(8), 0, dp(8), 0);
         consolePage.addView(videoStatus, new LinearLayout.LayoutParams(-1, dp(18)));
 
-        LinearLayout extraKeys = column();
+        extraKeys = column();
         extraKeys.setBackgroundColor(CONSOLE_BG);
         extraKeys.addView(compactKeyRow(new String[][]{
                 {"ESC", "Escape"}, {"/", "Slash"}, {"−", "Minus"},
@@ -213,8 +223,33 @@ public final class MainActivity extends Activity {
         extraKeys.addView(keyRow(functionKeys));
         consolePage.addView(extraKeys);
 
-        remoteInput = new RemoteInput(this);
-        consolePage.addView(remoteInput, new LinearLayout.LayoutParams(dp(1), dp(1)));
+    }
+
+    private void updateConsoleKeyboardInset() {
+        if (consolePage == null || !consolePage.isAttachedToWindow() || consolePage.getHeight() == 0) return;
+        Rect visible = new Rect();
+        consolePage.getWindowVisibleDisplayFrame(visible);
+        WindowInsets insets = consolePage.getRootWindowInsets();
+        boolean keyboardShown = (Build.VERSION.SDK_INT >= 30 && insets != null
+                && insets.isVisible(WindowInsets.Type.ime()))
+                || consolePage.getRootView().getHeight() - visible.bottom > dp(140);
+        if (extraKeys != null) extraKeys.setVisibility(keyboardShown ? View.VISIBLE : View.GONE);
+        int[] position = new int[2];
+        consolePage.getLocationOnScreen(position);
+        int contentBottom = position[1] + consolePage.getHeight();
+        int covered = Math.max(0, contentBottom - visible.bottom);
+        if (Build.VERSION.SDK_INT >= 30) {
+            if (insets != null && keyboardShown) {
+                Point display = new Point();
+                getWindowManager().getDefaultDisplay().getRealSize(display);
+                int keyboardTop = display.y - insets.getInsets(WindowInsets.Type.ime()).bottom;
+                covered = Math.max(covered, Math.max(0, contentBottom - keyboardTop));
+            }
+        }
+        int bottom = Math.max(consoleBottomInset, covered);
+        if (consolePage.getPaddingTop() != consoleTopInset || consolePage.getPaddingBottom() != bottom) {
+            consolePage.setPadding(0, consoleTopInset, 0, bottom);
+        }
     }
 
     private HorizontalScrollView keyRow(String[][] keys) {
@@ -304,13 +339,16 @@ public final class MainActivity extends Activity {
         if (keyboard == null) return;
         Rect visible = new Rect();
         consolePage.getWindowVisibleDisplayFrame(visible);
-        boolean shown = consolePage.getRootView().getHeight() - visible.bottom > dp(140);
+        WindowInsets insets = consolePage.getRootWindowInsets();
+        boolean shown = (Build.VERSION.SDK_INT >= 30 && insets != null
+                && insets.isVisible(WindowInsets.Type.ime()))
+                || consolePage.getRootView().getHeight() - visible.bottom > dp(140);
         if (shown) {
             keyboard.hideSoftInputFromWindow(remoteInput.getWindowToken(), 0);
         } else {
             remoteInput.requestFocus();
             keyboard.restartInput(remoteInput);
-            keyboard.showSoftInput(remoteInput, InputMethodManager.SHOW_IMPLICIT);
+            remoteInput.post(() -> keyboard.showSoftInput(remoteInput, InputMethodManager.SHOW_IMPLICIT));
         }
     }
 
@@ -561,8 +599,8 @@ public final class MainActivity extends Activity {
                 (float) screen.getHeight() / frame.getHeight());
         float width = frame.getWidth() * scale, height = frame.getHeight() * scale;
         float left = (screen.getWidth() - width) / 2, top = (screen.getHeight() - height) / 2;
-        if (x < left || x > left + width || y < top || y > top + height) return null;
-        return new PointF((x - left) / width, (y - top) / height);
+        return new PointF(Math.max(0f, Math.min(1f, (x - left) / width)),
+                Math.max(0f, Math.min(1f, (y - top) / height)));
     }
 
     private void queueMouseMove(float x, float y) {
@@ -572,19 +610,36 @@ public final class MainActivity extends Activity {
         if (moveQueued.compareAndSet(false, true)) mouseIo.execute(this::drainMouseMoves);
     }
 
+    private void queueMouseDelta(int dx, int dy) {
+        if (client == null || (dx == 0 && dy == 0)) return;
+        pendingMouseDx.addAndGet(dx);
+        pendingMouseDy.addAndGet(dy);
+        if (moveQueued.compareAndSet(false, true)) mouseIo.execute(this::drainMouseMoves);
+    }
+
     private void drainMouseMoves() {
         try {
-            PointF point;
-            while ((point = pendingMove.getAndSet(null)) != null) {
-                PikvmClient active = client;
-                if (active != null) active.moveMouse(point.x, point.y);
-            }
+            sendPendingMouseMoves(client);
         } catch (Exception error) {
             runOnUiThread(() -> showMessage(error.getMessage()));
         } finally {
             moveQueued.set(false);
-            if (pendingMove.get() != null && moveQueued.compareAndSet(false, true)) {
+            if ((pendingMove.get() != null || pendingMouseDx.get() != 0 || pendingMouseDy.get() != 0)
+                    && moveQueued.compareAndSet(false, true)) {
                 mouseIo.execute(this::drainMouseMoves);
+            }
+        }
+    }
+
+    private void sendPendingMouseMoves(PikvmClient active) throws Exception {
+        while (true) {
+            PointF point = pendingMove.getAndSet(null);
+            int dx = pendingMouseDx.getAndSet(0);
+            int dy = pendingMouseDy.getAndSet(0);
+            if (point == null && dx == 0 && dy == 0) return;
+            if (active != null && client == active) {
+                if (point != null) active.moveMouse(point.x, point.y);
+                if (dx != 0 || dy != 0) active.moveMouseRelative(dx, dy);
             }
         }
     }
@@ -593,7 +648,10 @@ public final class MainActivity extends Activity {
         PikvmClient active = client;
         if (active == null) return;
         mouseIo.execute(() -> {
-            try { active.mouseClick(button, count); }
+            try {
+                sendPendingMouseMoves(active);
+                active.mouseClick(button, count);
+            }
             catch (Exception error) { runOnUiThread(() -> showMessage(error.getMessage())); }
         });
     }
@@ -602,7 +660,10 @@ public final class MainActivity extends Activity {
         PikvmClient active = client;
         if (active == null) return;
         mouseIo.execute(() -> {
-            try { active.mouseButton(button, down); }
+            try {
+                sendPendingMouseMoves(active);
+                active.mouseButton(button, down);
+            }
             catch (Exception error) { runOnUiThread(() -> showMessage(error.getMessage())); }
         });
     }
@@ -689,7 +750,8 @@ public final class MainActivity extends Activity {
         private final int slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
         private Runnable longPress;
         private Runnable pendingClick;
-        private float startX, startY, lastTapX, lastTapY, scrollY;
+        private float startX, startY, lastX, lastY, residualX, residualY;
+        private float lastTapX, lastTapY, scrollY;
         private long lastTapAt;
         private boolean moved, multiTouch, scrolled, dragging;
 
@@ -700,6 +762,9 @@ public final class MainActivity extends Activity {
                 case MotionEvent.ACTION_DOWN:
                     startX = event.getX();
                     startY = event.getY();
+                    lastX = startX;
+                    lastY = startY;
+                    residualX = residualY = 0;
                     moved = multiTouch = scrolled = dragging = false;
                     resetKeyboardComposition();
                     queueMouseMove(startX, startY);
@@ -734,15 +799,15 @@ public final class MainActivity extends Activity {
                             moved = true;
                             if (!dragging) cancelRemoteLongPress();
                         }
-                        queueMouseMove(event.getX(), event.getY());
+                        movePointerWithFinger(event.getX(), event.getY());
                     }
                     return true;
                 case MotionEvent.ACTION_POINTER_UP:
                     return true;
                 case MotionEvent.ACTION_UP:
                     cancelRemoteLongPress();
+                    if (!multiTouch && moved) movePointerWithFinger(event.getX(), event.getY());
                     if (dragging) {
-                        queueMouseMove(event.getX(), event.getY());
                         mouseButton("left", false);
                     } else if (multiTouch) {
                         if (!scrolled) mouseClick("right", 1);
@@ -785,6 +850,22 @@ public final class MainActivity extends Activity {
             longPress = null;
         }
 
+        private void movePointerWithFinger(float x, float y) {
+            Bitmap frame = currentFrame;
+            if (frame != null && getWidth() > 0 && getHeight() > 0) {
+                float scale = Math.min((float) getWidth() / frame.getWidth(),
+                        (float) getHeight() / frame.getHeight());
+                residualX += (x - lastX) / scale;
+                residualY += (y - lastY) / scale;
+                int dx = (int) residualX, dy = (int) residualY;
+                residualX -= dx;
+                residualY -= dy;
+                queueMouseDelta(dx, dy);
+            }
+            lastX = x;
+            lastY = y;
+        }
+
         void resetGesture() {
             cancelRemoteLongPress();
             if (pendingClick != null) handler.removeCallbacks(pendingClick);
@@ -803,6 +884,8 @@ public final class MainActivity extends Activity {
         PikvmClient old = client;
         screen.resetGesture();
         pendingMove.set(null);
+        pendingMouseDx.set(0);
+        pendingMouseDy.set(0);
         handler.removeCallbacks(textFlush);
         pendingText.setLength(0);
         client = null;
