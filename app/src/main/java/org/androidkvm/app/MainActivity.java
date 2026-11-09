@@ -28,6 +28,9 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLPeerUnverifiedException;
+
 /** Minimal native Android console for PiKVM-compatible devices. */
 public final class MainActivity extends Activity {
     private static final int BG = Color.rgb(16, 24, 40);
@@ -117,7 +120,7 @@ public final class MainActivity extends Activity {
         for (EditText input : new EditText[]{addressInput, userInput, passwordInput, pinInput}) {
             loginPanel.addView(input, spaced());
         }
-        loginPanel.addView(text("For a self-signed certificate, enter its verified SHA-256 fingerprint. Passwords are not saved. For 2FA, append the current code to the password.", 12, MUTED), spaced());
+        loginPanel.addView(text("If Android does not trust the certificate, you can inspect its fingerprint before connecting. Passwords are not saved. For 2FA, append the current code to the password.", 12, MUTED), spaced());
         loginButton = button("Connect", ACCENT, BG);
         loginButton.setOnClickListener(view -> login());
         loginPanel.addView(loginButton, spaced());
@@ -238,7 +241,7 @@ public final class MainActivity extends Activity {
         String password = passwordInput.getText().toString();
         String pin = pinInput.getText().toString().trim();
         if (address.isEmpty() || user.isEmpty() || password.isEmpty()) {
-            showMessage("Enter the bridge address, username, and password.");
+            showMessage("Enter the KVM address, username, and password.");
             return;
         }
         loginButton.setEnabled(false);
@@ -261,12 +264,52 @@ public final class MainActivity extends Activity {
                     handler.post(powerPoll);
                 });
             } catch (Exception error) {
+                if (certificateError(error)) {
+                    if (!pin.isEmpty()) {
+                        runOnUiThread(() -> {
+                            loginButton.setEnabled(true);
+                            showMessage("The saved certificate fingerprint did not validate. Check it before reconnecting.");
+                        });
+                        return;
+                    }
+                    try {
+                        String fingerprint = PikvmClient.certificateFingerprint(address);
+                        runOnUiThread(() -> showCertificateDialog(address, fingerprint));
+                        return;
+                    } catch (Exception inspectionError) {
+                        // Show the original connection failure below.
+                    }
+                }
                 runOnUiThread(() -> {
                     loginButton.setEnabled(true);
                     showMessage(error.getMessage());
                 });
             }
         });
+    }
+
+    private static boolean certificateError(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SSLHandshakeException || cause instanceof SSLPeerUnverifiedException
+                    || cause instanceof java.security.cert.CertificateException) return true;
+        }
+        return false;
+    }
+
+    private void showCertificateDialog(String address, String fingerprint) {
+        loginButton.setEnabled(true);
+        showMessage("Certificate confirmation required");
+        new AlertDialog.Builder(this)
+                .setTitle("Verify KVM certificate")
+                .setMessage("Android does not trust the certificate presented by " + address
+                        + ". Compare this SHA-256 fingerprint with your KVM before continuing:\n\n"
+                        + fingerprint)
+                .setNegativeButton("Cancel", (dialog, which) -> showMessage("Connection cancelled"))
+                .setPositiveButton("Trust and connect", (dialog, which) -> {
+                    pinInput.setText(fingerprint);
+                    login();
+                })
+                .show();
     }
 
     private void startVideo(PikvmClient active) {
@@ -303,7 +346,7 @@ public final class MainActivity extends Activity {
                 PikvmClient.PowerState state = active.powerState();
                 runOnUiThread(() -> {
                     if (client != active) return;
-                    powerStatus.setText(state.enabled ? (state.on ? "Computer is on" : "Computer is off") : "ATX control unavailable");
+                    powerStatus.setText(state.enabled ? (state.on ? "Power LED reports on" : "Power LED reports off") : "ATX control unavailable");
                     onButton.setEnabled(state.enabled && !state.on);
                     offButton.setEnabled(state.enabled && state.on);
                     onButton.setAlpha(onButton.isEnabled() ? 1f : 0.45f);

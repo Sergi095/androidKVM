@@ -9,15 +9,16 @@ or Termux code is included.
 
 - Log in with the KVM web account; the app keeps the session cookie in memory.
 - View the live screen and tap it for a left mouse click.
-- See power status and send On or soft Off when ATX control is available.
+- See the reported ATX power LED state and send On or soft Off when ATX control is available.
 - Use a Termux-style extra-key bar: Escape, Tab, Ctrl, Alt, Shift, arrows,
   Delete, Backspace, Enter, and F1–F12. Tap modifiers first for shortcuts.
 - Type text with the Android keyboard and send it through `/api/hid/print`.
 
 The app does not save the password. It remembers the address, username and
-optional certificate fingerprint on the phone. It requires HTTPS. If the KVM
-uses a self-signed certificate, enter its SHA-256 fingerprint after verifying
-it through a trusted channel. For example, on the KVM itself:
+optional certificate fingerprint on the phone. It requires HTTPS. If Android
+does not trust the KVM certificate, the app shows its SHA-256 fingerprint and
+waits for confirmation before sending credentials. Compare that fingerprint
+through a trusted channel. For example, on the KVM itself:
 
 ```sh
 openssl x509 -in /path/to/server.crt -noout -fingerprint -sha256
@@ -41,6 +42,10 @@ on another port, include it in the address, such as `nanokvm:8443`.
 The phone must be able to reach the KVM over the LAN or a VPN. Live video uses
 `/streamer/stream` (MJPEG). Other video transports, audio, virtual media and
 advanced mouse gestures are outside this initial app.
+
+Power buttons follow the KVM's reported ATX LED state. If the screen is live
+but the app reports the power LED as off, check the KVM or bridge's ATX sensing
+before relying on those buttons.
 
 ## GitHub Actions releases
 

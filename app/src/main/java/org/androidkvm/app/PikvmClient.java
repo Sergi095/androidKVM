@@ -9,6 +9,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +26,8 @@ import java.util.concurrent.TimeUnit;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
@@ -91,6 +95,38 @@ final class PikvmClient {
         }
         int port = uri.getPort() < 0 ? 443 : uri.getPort();
         return new URI("https", null, uri.getHost(), port, null, null, null).toString();
+    }
+
+    /** Reads the presented certificate without completing a trusted connection or sending credentials. */
+    static String certificateFingerprint(String address) throws Exception {
+        URI uri = new URI(normalizeAddress(address));
+        CapturingTrustManager capture = new CapturingTrustManager();
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(null, new TrustManager[]{capture}, new SecureRandom());
+        try (Socket connection = new Socket()) {
+            connection.connect(new InetSocketAddress(uri.getHost(), uri.getPort()), 7000);
+            try (SSLSocket socket = (SSLSocket) context.getSocketFactory()
+                    .createSocket(connection, uri.getHost(), uri.getPort(), true)) {
+                socket.setSoTimeout(7000);
+                try {
+                    socket.startHandshake();
+                } catch (SSLException expected) {
+                    if (capture.certificate == null) throw expected;
+                }
+            }
+        }
+        if (capture.certificate == null) throw new IOException("The device did not present a certificate.");
+        return fingerprint(capture.certificate);
+    }
+
+    private static String fingerprint(X509Certificate certificate) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded());
+        StringBuilder value = new StringBuilder(95);
+        for (byte b : digest) {
+            if (value.length() > 0) value.append(':');
+            value.append(String.format(Locale.ROOT, "%02X", b & 0xff));
+        }
+        return value.toString();
     }
 
     private HttpsURLConnection connect(String path, String method, byte[] body, String contentType)
@@ -281,6 +317,17 @@ final class PikvmClient {
             } catch (NoSuchAlgorithmException e) {
                 throw new CertificateException(e);
             }
+        }
+        @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+    }
+
+    private static final class CapturingTrustManager implements X509TrustManager {
+        X509Certificate certificate;
+        @Override public void checkClientTrusted(X509Certificate[] chain, String authType) { }
+        @Override public void checkServerTrusted(X509Certificate[] chain, String authType)
+                throws CertificateException {
+            if (chain != null && chain.length > 0) certificate = chain[0];
+            throw new CertificateException("Certificate requires confirmation");
         }
         @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
     }
