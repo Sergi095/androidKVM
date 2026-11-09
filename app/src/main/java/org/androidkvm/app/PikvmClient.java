@@ -227,12 +227,28 @@ final class PikvmClient {
         }
     }
 
-    void tap(float x, float y) throws IOException, JSONException {
+    void moveMouse(float x, float y) throws IOException, JSONException {
         int toX = Math.max(-32768, Math.min(32767, Math.round(x * 65535) - 32768));
         int toY = Math.max(-32768, Math.min(32767, Math.round(y * 65535) - 32768));
         request("/api/hid/events/send_mouse_move?to_x=" + toX + "&to_y=" + toY,
                 "POST", new byte[0], "text/plain");
-        request("/api/hid/events/send_mouse_button?button=left", "POST", new byte[0], "text/plain");
+    }
+
+    void mouseClick(String button, int count) throws IOException, JSONException {
+        for (int n = 0; n < count; n++) {
+            request("/api/hid/events/send_mouse_button?button=" + encode(button),
+                    "POST", new byte[0], "text/plain");
+        }
+    }
+
+    void mouseButton(String button, boolean down) throws IOException, JSONException {
+        request("/api/hid/events/send_mouse_button?button=" + encode(button)
+                        + "&state=" + down, "POST", new byte[0], "text/plain");
+    }
+
+    void mouseWheel(int steps) throws IOException, JSONException {
+        request("/api/hid/events/send_mouse_wheel?delta_y=" + Math.max(-127, Math.min(127, steps)),
+                "POST", new byte[0], "text/plain");
     }
 
     HttpsURLConnection openVideo() throws IOException {

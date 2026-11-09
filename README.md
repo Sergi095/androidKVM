@@ -8,11 +8,16 @@ or Termux code is included.
 ## Features
 
 - Log in with the KVM web account; the app keeps the session cookie in memory.
-- View the live screen and tap it for a left mouse click.
+- View the live screen in a console that expands when the Android keyboard is hidden.
+- Move the mouse directly by touching or dragging on the screen. Tap for left click,
+  double tap for double click, long press then move for left-button drag,
+  two-finger tap for right click, and two-finger vertical swipe to scroll.
 - See the reported ATX power LED state and send On or soft Off when ATX control is available.
-- Use a Termux-style extra-key bar: Escape, Tab, Ctrl, Alt, Shift, arrows,
-  Delete, Backspace, Enter, and F1–F12. Tap modifiers first for shortcuts.
-- Type text with the Android keyboard and send it through `/api/hid/print`.
+- Use a Termux-style extra-key bar with Escape, Tab, Ctrl, Alt, arrows,
+  Home, End, Page Up, Page Down, and a swipeable F1–F12 row. Tap a modifier
+  first for a shortcut.
+- Type directly with the Android keyboard. The keyboard button in the console
+  toolbar shows or hides it, and the remote screen adjusts to the space available.
 
 The app does not save the password. It remembers the address, username and
 optional certificate fingerprint on the phone. It requires HTTPS. If Android
@@ -40,8 +45,8 @@ device hostname or HTTPS URL. The default port is 443; for a bridge listening
 on another port, include it in the address, such as `nanokvm:8443`.
 
 The phone must be able to reach the KVM over the LAN or a VPN. Live video uses
-`/streamer/stream` (MJPEG). Other video transports, audio, virtual media and
-advanced mouse gestures are outside this initial app.
+`/streamer/stream` (MJPEG). Other video transports, audio and virtual media
+are outside this initial app.
 
 Power buttons follow the KVM's reported ATX LED state. If the screen is live
 but the app reports the power LED as off, check the KVM or bridge's ATX sensing
