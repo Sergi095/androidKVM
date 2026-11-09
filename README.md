@@ -37,16 +37,18 @@ Your phone's keyboard may look different.
 
 ## Updating an installed app
 
-1. On your phone, download the newest signed APK from
-   [GitHub Releases](https://github.com/Sergi095/androidKVM/releases/latest).
-2. Open the downloaded APK and choose **Update**. Android may first ask you to
-   allow installs from your browser or file manager.
+Open the **Updates** tab and tap **Check for updates**. When a newer version is
+available, tap **Download and install**. The app downloads the signed APK from
+[this repository's latest GitHub Release](https://github.com/Sergi095/androidKVM/releases/latest),
+checks its SHA-256 digest, package name, version, and signing certificate, then
+opens Android's installer. Android may ask you to allow androidKVM to install
+apps the first time. Confirm **Update** in the installer. The app never installs
+silently.
 
-Install it over the existing release; uninstalling first removes saved KVMs.
-The package ID and release signing key stay the same, and each release raises
-the version code so Android accepts the update. The debug APK has a different
-signing key and cannot update a release installation. Updates are manual for
-now. See [Android's update rules](https://developer.android.com/google/play/app-updates).
+Install over the existing release; uninstalling first removes saved KVMs. The
+package ID and release signing key stay the same, and each release raises the
+version code so Android accepts the update. The debug APK has a different
+signing key and cannot update a release installation.
 
 ## Features
 
@@ -54,6 +56,8 @@ now. See [Android's update rules](https://developer.android.com/google/play/app-
   reconnect; saved passwords are encrypted with a key in Android Keystore.
 - Pick a KVM from a compact device list or add a new one. The dark console
   keeps the video prominent, with quick keyboard, mouse-mode, and power controls.
+- Check for updates in the app and download verified release APKs directly from
+  this repository.
 - View the live screen in a console that expands when the Android keyboard is hidden.
 - On a NanoKVM bridge running on the same host as NanoKVM, use its native H.264
   Direct stream with Android's video decoder when the certificate pin matches.
