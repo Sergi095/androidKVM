@@ -6,9 +6,6 @@ import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -583,9 +580,7 @@ public final class MainActivity extends Activity {
         Button wake = button("Wake via WOL", SURFACE, KEY_ACCENT);
         TextView wakeStatus = text(wolProfile == null
                 ? "Set up WOL on this KVM's saved card to enable it."
-                : (wolProfile.wolVpnDestination.isEmpty()
-                    ? "Send locally and try 255.255.255.255 over VPN when active."
-                    : "Send to both local and VPN/WireGuard destinations."), 12, MUTED);
+                : "The KVM sends the wake packet on its own LAN.", 12, MUTED);
         wake.setEnabled(wolProfile != null);
         wake.setAlpha(wolProfile != null ? 1f : 0.45f);
         if (wolProfile != null) wake.setOnClickListener(view -> sendWakeOnLan(wolProfile, wake, wakeStatus));
@@ -714,24 +709,16 @@ public final class MainActivity extends Activity {
     private void showWakeOnLanDialog(ProfileStore.Profile profile) {
         LinearLayout form = column();
         form.setPadding(dp(20), dp(8), dp(20), 0);
-        form.addView(text("Use the computer's network MAC address, not the KVM's. "
-                + "The destinations must be reachable from this phone.", 13, MUTED));
+        form.addView(text("Enter the computer's wired network MAC, not the KVM's. "
+                + "NanoKVM sends WOL directly; PiKVM needs its WOL GPIO output configured.", 13, MUTED));
         EditText mac = field("Computer MAC, e.g. AA:BB:CC:DD:EE:FF", false);
         mac.setText(profile.wolMac);
         form.addView(mac, spaced());
-        EditText destination = field("Local broadcast IP or hostname", false);
-        destination.setText(profile.wolDestination.isEmpty()
-                ? "255.255.255.255" : profile.wolDestination);
-        form.addView(destination, spaced());
-        EditText vpnDestination = field("VPN/WireGuard broadcast or relay (optional)", false);
-        vpnDestination.setText(profile.wolVpnDestination);
-        form.addView(vpnDestination, spaced());
-        EditText port = field("UDP port", false);
-        port.setInputType(InputType.TYPE_CLASS_NUMBER);
-        port.setText(String.valueOf(profile.wolPort));
-        form.addView(port, spaced());
-        form.addView(text("Local defaults to 255.255.255.255. The Power menu also tries that "
-                + "address over an active VPN; enter a VPN broadcast or relay when needed.",
+        EditText gpioChannel = field("PiKVM WOL GPIO channel (optional)", false);
+        gpioChannel.setText(profile.wolGpioChannel);
+        form.addView(gpioChannel, spaced());
+        form.addView(text("Leave the channel blank to detect a WOL-named PiKVM output. "
+                + "If PiKVM has several WOL outputs, enter the channel for this computer.",
                 12, MUTED), spaced());
         ScrollView scroll = new ScrollView(this);
         scroll.addView(form);
@@ -743,7 +730,7 @@ public final class MainActivity extends Activity {
         if (!profile.wolMac.isEmpty()) {
             builder.setNeutralButton("Disable", (dialog, which) -> {
                 try {
-                    profileStore.setWakeOnLan(profile.id, "", "255.255.255.255", "", 9);
+                    profileStore.setWakeOnLan(profile.id, "", "");
                     renderSavedProfiles();
                 } catch (Exception error) {
                     Toast.makeText(this, "Could not remove WOL settings.", Toast.LENGTH_LONG).show();
@@ -755,11 +742,11 @@ public final class MainActivity extends Activity {
                 .setOnClickListener(view -> {
                     try {
                         String normalizedMac = WakeOnLan.canonicalMac(mac.getText().toString());
-                        String target = WakeOnLan.destination(destination.getText().toString());
-                        String vpnText = vpnDestination.getText().toString().trim();
-                        String vpnTarget = vpnText.isEmpty() ? "" : WakeOnLan.destination(vpnText);
-                        int udpPort = WakeOnLan.port(port.getText().toString());
-                        profileStore.setWakeOnLan(profile.id, normalizedMac, target, vpnTarget, udpPort);
+                        String channel = gpioChannel.getText().toString().trim();
+                        if (!channel.isEmpty() && !channel.matches("[A-Za-z0-9_]{1,64}")) {
+                            throw new IllegalArgumentException("PiKVM channel must use letters, numbers, or underscores.");
+                        }
+                        profileStore.setWakeOnLan(profile.id, normalizedMac, channel);
                         renderSavedProfiles();
                         dialog.dismiss();
                     } catch (IllegalArgumentException error) {
@@ -781,16 +768,16 @@ public final class MainActivity extends Activity {
 
     private void sendWakeOnLan(ProfileStore.Profile profile, Button wakeButton, TextView status) {
         wakeButton.setEnabled(false);
-        status.setText("Sending magic packet…");
+        status.setText("Asking KVM to send wake packet…");
         wolIo.execute(() -> {
             try {
-                WakeOnLan.SendResult result = WakeOnLan.sendBoth(profile.wolMac,
-                        profile.wolDestination, profile.wolVpnDestination, profile.wolPort,
-                        networkBinder(false), networkBinder(true));
+                PikvmClient active = client;
+                if (active == null) throw new IllegalStateException("KVM is disconnected.");
+                String result = active.wakeFromKvm(profile.wolMac, profile.wolGpioChannel);
                 runOnUiThread(() -> {
                     wakeButton.setEnabled(true);
-                    status.setText(result.message());
-                    Toast.makeText(this, result.message(), Toast.LENGTH_LONG).show();
+                    status.setText(result);
+                    Toast.makeText(this, result, Toast.LENGTH_LONG).show();
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
@@ -801,21 +788,6 @@ public final class MainActivity extends Activity {
                 });
             }
         });
-    }
-
-    private WakeOnLan.SocketBinder networkBinder(boolean vpn) {
-        ConnectivityManager connectivity = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-        if (connectivity == null) return null;
-        for (Network network : connectivity.getAllNetworks()) {
-            NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
-            if (capabilities == null) continue;
-            boolean match = vpn ? capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                    : !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                    && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
-            if (match) return network::bindSocket;
-        }
-        return null;
     }
 
     private void connectSavedProfile(ProfileStore.Profile profile) {

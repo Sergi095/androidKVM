@@ -64,8 +64,8 @@ signing key and cannot update a release installation.
   The mouse control button can switch between direct touch and relative trackpad mode.
 - See the reported ATX power LED state and send On or soft Off when ATX control is available.
 - Configure Wake-on-LAN separately for each saved KVM, then tap **Wake via WOL**
-  in the console's Power menu. It sends to the local destination and also tries
-  the VPN/WireGuard route when active or configured.
+  in the console's Power menu. The KVM sends the packet on its own LAN, so the
+  phone can use a VPN connection to the KVM.
 - Use a Termux-style extra-key bar with Escape, Tab, Ctrl, Alt, arrows,
   Home, End, Page Up, Page Down, and a swipeable F1–F12 row with Delete at the
   end. It sits directly above the Android keyboard and hides with it. Tap a
@@ -115,19 +115,23 @@ before relying on those buttons.
 ### Wake-on-LAN
 
 On a saved KVM card, tap **Set up Wake-on-LAN**. Enter the **computer's wired
-network MAC address** (not the PiKVM or NanoKVM MAC). The local destination
-defaults to `255.255.255.255` and UDP port `9`. Optionally enter a separate
-VPN/WireGuard broadcast or relay address. Open the KVM console, tap its Power
-icon, then tap **Wake via WOL**. The app sends locally first. If a VPN is
-active, it also tries `255.255.255.255` through that VPN; a configured VPN
-destination takes its place. WOL does not confirm whether the computer woke,
-so the app reports which packet sends succeeded.
+network MAC address** (not the PiKVM or NanoKVM MAC). Open the KVM console,
+tap its Power icon, then tap **Wake via WOL**. The request goes over the same
+HTTPS connection as the console; the KVM sends the packet on its LAN. You do
+not need a VPN broadcast IP on the phone. WOL does not confirm that the computer
+woke, so the app reports when the KVM accepted the wake request.
 Use **WOL settings** on the saved card to edit or disable it. These settings
 stay attached to the saved KVM when you reconnect.
 
-Wake-on-LAN must be enabled in the computer's firmware and network adapter. If
-the phone connects through a VPN or another subnet, use a reachable directed
-broadcast address or a WOL relay; routers may block broadcast packets.
+For NanoKVM, the app calls its native WOL API through the NanoKVM session on
+the same host as the bridge. The bridge and NanoKVM must share a pinned HTTPS
+certificate for that session. For PiKVM, first [configure a WOL GPIO output on
+the PiKVM](https://docs.pikvm.org/wol/). The app detects an output with `wol`
+in its channel or driver name. If there is more than one, enter the desired
+GPIO channel in the saved KVM's WOL settings. PiKVM stores the destination MAC
+in its own configuration; the MAC saved in androidKVM is used by NanoKVM.
+
+Wake-on-LAN must be enabled in the computer's firmware and network adapter.
 
 ## GitHub Actions releases
 

@@ -297,6 +297,77 @@ final class PikvmClient {
         request("/api/atx/power?action=" + (on ? "on" : "off"), "POST", new byte[0], "text/plain");
     }
 
+    /** Ask the KVM to send WOL from its LAN. NanoKVM uses its native API; PiKVM uses GPIO. */
+    String wakeFromKvm(String mac, String gpioChannel) throws IOException, JSONException {
+        if (nativeCookie != null) {
+            byte[] body = new JSONObject().put("mac", mac).toString().getBytes(StandardCharsets.UTF_8);
+            HttpsURLConnection connection = (HttpsURLConnection) new URL(
+                    nativeBaseUrl + "/api/network/wol").openConnection();
+            connection.setSSLSocketFactory(pinnedFactory);
+            connection.setHostnameVerifier((host, session) -> true);
+            connection.setConnectTimeout(7000);
+            connection.setReadTimeout(12000);
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Cookie", nativeCookie);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+            connection.setFixedLengthStreamingMode(body.length);
+            try {
+                try (OutputStream output = connection.getOutputStream()) { output.write(body); }
+                int status = connection.getResponseCode();
+                InputStream stream = status < 400 ? connection.getInputStream() : connection.getErrorStream();
+                JSONObject response = new JSONObject(stream == null ? "{}" : new String(
+                        readLimited(stream, 65536), StandardCharsets.UTF_8));
+                if (status != 200 || response.optInt("code", -1) != 0) {
+                    throw new IOException("NanoKVM WOL failed: "
+                            + response.optString("msg", "HTTP " + status));
+                }
+                return "NanoKVM sent the wake packet on its LAN.";
+            } finally {
+                connection.disconnect();
+            }
+        }
+
+        if (request("/api/info", "GET", null, null).has("bridge")) {
+            throw new IOException("NanoKVM WOL is unavailable. Reconnect and check its native service.");
+        }
+        JSONObject outputs = request("/api/gpio", "GET", null, null)
+                .getJSONObject("model").getJSONObject("scheme").getJSONObject("outputs");
+        String selected = gpioChannel.trim();
+        if (selected.isEmpty()) {
+            for (java.util.Iterator<String> keys = outputs.keys(); keys.hasNext(); ) {
+                String channel = keys.next();
+                JSONObject hw = outputs.getJSONObject(channel).optJSONObject("hw");
+                String driver = hw == null ? "" : hw.optString("driver");
+                if (!channel.toLowerCase(Locale.ROOT).contains("wol")
+                        && !driver.toLowerCase(Locale.ROOT).contains("wol")) continue;
+                if (!selected.isEmpty()) {
+                    throw new IOException("PiKVM has several WOL outputs. Enter this PC's GPIO channel in WOL settings.");
+                }
+                selected = channel;
+            }
+            if (selected.isEmpty()) {
+                throw new IOException("No PiKVM WOL output found. Configure WOL on PiKVM, then reconnect.");
+            }
+        }
+        if (!outputs.has(selected)) {
+            throw new IOException("PiKVM GPIO channel '" + selected + "' was not found.");
+        }
+        JSONObject output = outputs.getJSONObject(selected);
+        JSONObject pulse = output.optJSONObject("pulse");
+        String path;
+        if (pulse != null && pulse.optDouble("delay") > 0) {
+            path = "/api/gpio/pulse?channel=" + encode(selected) + "&wait=1";
+        } else if (output.optBoolean("switch")) {
+            path = "/api/gpio/switch?channel=" + encode(selected) + "&state=1&wait=1";
+        } else {
+            throw new IOException("PiKVM GPIO channel '" + selected + "' cannot be triggered.");
+        }
+        request(path, "POST", new byte[0], "text/plain");
+        return "PiKVM sent the wake packet via " + selected + ".";
+    }
+
     void sendKey(String code, List<String> modifiers) throws IOException, JSONException {
         if (eventsReady && events != null) {
             boolean sent = true;
