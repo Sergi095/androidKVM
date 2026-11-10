@@ -48,4 +48,4 @@ Saved KVM passwords are encrypted on your phone. With the app lock enabled, Andr
 
 ## For developers
 
-Build, release signing, and protocol notes are in [Development](docs/DEVELOPMENT.md). This project is [MIT licensed](LICENSE); the raccoon icon is original and included under the same license.
+Build, release signing, and protocol notes are in [Development](docs/DEVELOPMENT.md). This project is [MIT licensed](LICENSE).
