@@ -1,6 +1,5 @@
 package org.androidkvm.app;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Context;
@@ -23,6 +22,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.InputFilter;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -43,12 +43,17 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.view.TextureView;
 
 import androidx.core.content.FileProvider;
+import androidx.core.content.ContextCompat;
+import androidx.biometric.BiometricManager;
+import androidx.biometric.BiometricPrompt;
+import androidx.fragment.app.FragmentActivity;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -63,7 +68,7 @@ import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLPeerUnverifiedException;
 
 /** Minimal native Android console for PiKVM-compatible devices. */
-public final class MainActivity extends Activity {
+public final class MainActivity extends FragmentActivity {
     private static final int BG = Color.rgb(8, 16, 31);
     private static final int CONSOLE_BG = Color.BLACK;
     private static final int PANEL = Color.rgb(27, 39, 59);
@@ -79,12 +84,15 @@ public final class MainActivity extends Activity {
     private final ExecutorService mouseIo = Executors.newSingleThreadExecutor();
     private final ExecutorService updatesIo = Executors.newSingleThreadExecutor();
     private final ExecutorService wolIo = Executors.newSingleThreadExecutor();
+    private final ExecutorService securityIo = Executors.newSingleThreadExecutor();
     private final StringBuilder pendingText = new StringBuilder();
     private final Runnable textFlush = this::flushTextNow;
     private final AtomicReference<PointF> pendingMove = new AtomicReference<>();
     private final AtomicBoolean moveQueued = new AtomicBoolean();
     private final LinkedHashSet<String> modifiers = new LinkedHashSet<>();
     private final List<Button> modifierButtons = new ArrayList<>();
+    private final List<AlertDialog> openDialogs = new ArrayList<>();
+    private AlertDialog securitySettingsDialog;
     private PikvmClient client;
     private MjpegReader videoReader;
     private H264Reader h264Reader;
@@ -100,6 +108,14 @@ public final class MainActivity extends Activity {
     private String activeAddress = "", activeUser = "";
     private CheckBox rememberInput;
     private ProfileStore profileStore;
+    private SecurityStore securityStore;
+    private BiometricPrompt biometricPrompt;
+    private ScrollView lockPage;
+    private View resumePage;
+    private EditText lockPinInput;
+    private TextView lockStatus;
+    private boolean locked, foreground, promptBusy, pinCheckBusy, pendingBiometricUnlock;
+    private boolean enablingBiometrics;
     private RemoteScreen screen;
     private FrameLayout videoArea;
     private TextureView fastVideo;
@@ -130,21 +146,93 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         profileStore = new ProfileStore(this);
+        securityStore = new SecurityStore(this);
         updateManager = new UpdateManager(this);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         buildUi();
+        biometricPrompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
+                new BiometricPrompt.AuthenticationCallback() {
+                    @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                        promptBusy = false;
+                        if (!foreground) {
+                            if (!enablingBiometrics) pendingBiometricUnlock = true;
+                            return;
+                        }
+                        if (enablingBiometrics) {
+                            enablingBiometrics = false;
+                            try {
+                                securityStore.setBiometrics(true);
+                                refreshSecureFlag();
+                                showSecuritySettings();
+                            } catch (Exception error) {
+                                Toast.makeText(MainActivity.this, error.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        } else if (locked) unlockApp();
+                    }
+
+                    @Override public void onAuthenticationError(int code, CharSequence message) {
+                        promptBusy = false;
+                        if (enablingBiometrics) enablingBiometrics = false;
+                        if (locked && lockStatus != null && foreground) {
+                            lockStatus.setText("Use the unlock button to try again.");
+                        }
+                    }
+
+                    @Override public void onAuthenticationFailed() {
+                        if (locked && lockStatus != null) lockStatus.setText("Not recognized. Try again.");
+                    }
+                });
+        if (state != null) enablingBiometrics = state.getBoolean("enabling_biometrics", false);
+        refreshSecureFlag();
+        if (securityStore.enabled()) displayLockPage();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putBoolean("enabling_biometrics", enablingBiometrics);
+        super.onSaveInstanceState(state);
     }
 
     @Override public void onStart() {
         super.onStart();
-        if (client != null) startVideo(client);
+        foreground = true;
+        if (locked) {
+            if (pendingBiometricUnlock) {
+                pendingBiometricUnlock = false;
+                unlockApp();
+            }
+        } else if (client != null) {
+            startVideo(client);
+            handler.removeCallbacks(powerPoll);
+            handler.post(powerPoll);
+        }
+    }
+
+    @Override public void onResume() {
+        super.onResume();
+        foreground = true;
+        if (locked && securityStore.hasBiometrics()) {
+            handler.postDelayed(this::promptBiometricUnlock, 150);
+        }
+    }
+
+    @Override public void onPause() {
+        foreground = false;
+        if (securityStore.enabled() && !locked && !promptBusy) {
+            for (AlertDialog dialog : new ArrayList<>(openDialogs)) dialog.dismiss();
+            displayLockPage();
+        }
+        super.onPause();
     }
 
     @Override public void onStop() {
+        foreground = false;
+        for (AlertDialog dialog : new ArrayList<>(openDialogs)) dialog.dismiss();
+        handler.removeCallbacks(powerPoll);
         stopVideo();
         if (client != null) client.stopEvents();
+        if (securityStore.enabled() && !locked) displayLockPage();
         super.onStop();
     }
 
@@ -155,7 +243,289 @@ public final class MainActivity extends Activity {
         mouseIo.shutdownNow();
         updatesIo.shutdownNow();
         wolIo.shutdownNow();
+        securityIo.shutdownNow();
         super.onDestroy();
+    }
+
+    private void showOverflow(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add("Security settings").setOnMenuItemClickListener(item -> {
+            showSecuritySettings();
+            return true;
+        });
+        if (securityStore.enabled()) {
+            menu.getMenu().add("Lock now").setOnMenuItemClickListener(item -> {
+                displayLockPage();
+                if (securityStore.hasBiometrics()) handler.post(this::promptBiometricUnlock);
+                return true;
+            });
+        }
+        menu.show();
+    }
+
+    private void showTrackedDialog(AlertDialog dialog) {
+        showTrackedDialog(dialog, null);
+    }
+
+    private void showTrackedDialog(AlertDialog dialog, Runnable onDismiss) {
+        openDialogs.add(dialog);
+        dialog.setOnDismissListener(ignored -> {
+            openDialogs.remove(dialog);
+            if (securitySettingsDialog == dialog) securitySettingsDialog = null;
+            if (onDismiss != null) onDismiss.run();
+        });
+        dialog.show();
+    }
+
+    private void refreshSecureFlag() {
+        if (securityStore.enabled()) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        }
+    }
+
+    private void displayLockPage() {
+        locked = true;
+        handler.removeCallbacks(powerPoll);
+        stopVideo();
+        if (client != null) client.stopEvents();
+        View focused = getCurrentFocus();
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (focused != null && keyboard != null) {
+            keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+        }
+        lockPage = new ScrollView(this);
+        lockPage.setFillViewport(true);
+        lockPage.setBackgroundColor(BG);
+        LinearLayout root = column();
+        root.setGravity(Gravity.CENTER_VERTICAL);
+        root.setPadding(dp(26), dp(36), dp(26), dp(36));
+        lockPage.addView(root);
+        ImageView mascot = new ImageView(this);
+        mascot.setImageResource(R.drawable.ic_launcher);
+        root.addView(mascot, new LinearLayout.LayoutParams(dp(70), dp(70)));
+        TextView title = text("Unlock androidKVM", 25, TEXT);
+        title.setTypeface(null, 1);
+        root.addView(title, spaced());
+        root.addView(text("Your saved KVMs are locked.", 14, MUTED), spaced());
+        lockStatus = text("", 13, MUTED);
+        if (securityStore.hasPin()) {
+            lockPinInput = pinField("App PIN");
+            lockPinInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+            lockPinInput.setOnEditorActionListener((view, action, event) -> {
+                if (action == EditorInfo.IME_ACTION_DONE) { tryUnlockPin(); return true; }
+                return false;
+            });
+            root.addView(lockPinInput, spaced());
+            Button unlock = button("Unlock with PIN", ACCENT, BG);
+            unlock.setOnClickListener(view -> tryUnlockPin());
+            root.addView(unlock, spaced());
+        } else {
+            lockPinInput = null;
+        }
+        if (securityStore.hasBiometrics()) {
+            Button useBio = button("Use biometrics", SURFACE, TEXT);
+            useBio.setOnClickListener(view -> promptBiometricUnlock());
+            root.addView(useBio, spaced());
+            if (!securityStore.hasPin()) {
+                root.addView(text("Your Android screen lock is available as a fallback.",
+                        12, MUTED), spaced());
+            }
+        }
+        root.addView(lockStatus, spaced());
+        setContentView(lockPage);
+    }
+
+    private void tryUnlockPin() {
+        if (!locked || !securityStore.hasPin() || pinCheckBusy) return;
+        long wait = securityStore.retrySeconds();
+        if (wait > 0) {
+            lockStatus.setText("Too many attempts. Try again in " + wait + " seconds.");
+            return;
+        }
+        String candidate = lockPinInput.getText().toString();
+        lockPinInput.setText("");
+        pinCheckBusy = true;
+        lockStatus.setText("Checking PIN…");
+        securityIo.execute(() -> {
+            try {
+                boolean valid = securityStore.verifyPin(candidate);
+                if (valid) securityStore.clearFailures();
+                else securityStore.recordFailure();
+                runOnUiThread(() -> {
+                    pinCheckBusy = false;
+                    if (!locked) return;
+                    if (valid) unlockApp();
+                    else {
+                        long retry = securityStore.retrySeconds();
+                        lockStatus.setText(retry > 0
+                                ? "Too many attempts. Try again in " + retry + " seconds."
+                                : "Incorrect PIN.");
+                    }
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    pinCheckBusy = false;
+                    if (locked) lockStatus.setText("Could not check PIN: " + error.getMessage());
+                });
+            }
+        });
+    }
+
+    private void unlockApp() {
+        locked = false;
+        securityStore.clearFailures();
+        setContentView(resumePage == consolePage && client == null ? loginPage : resumePage);
+        if (client != null && resumePage == consolePage) {
+            startVideo(client);
+            handler.removeCallbacks(powerPoll);
+            handler.post(powerPoll);
+        }
+        lockPage = null;
+        lockPinInput = null;
+        lockStatus = null;
+    }
+
+    private void promptBiometricUnlock() {
+        if (!foreground || !locked || !securityStore.hasBiometrics() || promptBusy) return;
+        int authenticators = BiometricManager.Authenticators.BIOMETRIC_WEAK;
+        if (!securityStore.hasPin()) authenticators |= BiometricManager.Authenticators.DEVICE_CREDENTIAL;
+        if (BiometricManager.from(this).canAuthenticate(authenticators)
+                != BiometricManager.BIOMETRIC_SUCCESS) {
+            if (lockStatus != null) lockStatus.setText("Biometrics are unavailable on this device.");
+            return;
+        }
+        BiometricPrompt.PromptInfo.Builder info = new BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Unlock androidKVM")
+                .setAllowedAuthenticators(authenticators);
+        if (securityStore.hasPin()) info.setNegativeButtonText("Use app PIN");
+        promptBusy = true;
+        enablingBiometrics = false;
+        biometricPrompt.authenticate(info.build());
+    }
+
+    private void showSecuritySettings() {
+        if (locked) return;
+        if (securitySettingsDialog != null) securitySettingsDialog.dismiss();
+        LinearLayout content = panel();
+        boolean pin = securityStore.hasPin();
+        boolean bio = securityStore.hasBiometrics();
+        content.addView(text(!pin && !bio ? "App lock is off."
+                : pin && bio ? "Unlock with your app PIN or biometrics."
+                : pin ? "Unlock with your app PIN."
+                : "Unlock with biometrics or your Android screen lock.", 14, TEXT));
+        content.addView(text("The lock appears whenever you leave and reopen the app.",
+                12, MUTED), spaced());
+        Button setPin = button(pin ? "Change PIN" : "Set app PIN", SURFACE, TEXT);
+        setPin.setOnClickListener(view -> showPinSetup());
+        content.addView(setPin, spaced());
+        if (pin) {
+            Button removePin = button("Remove PIN", SURFACE, MUTED);
+            removePin.setOnClickListener(view -> showRemovePin());
+            content.addView(removePin, spaced());
+        }
+        Button biometrics = button(bio ? "Turn off biometrics" : "Turn on biometrics", SURFACE, TEXT);
+        biometrics.setOnClickListener(view -> {
+            if (bio) {
+                try {
+                    securityStore.setBiometrics(false);
+                    refreshSecureFlag();
+                    showSecuritySettings();
+                } catch (Exception error) {
+                    Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            } else enableBiometrics();
+        });
+        content.addView(biometrics, spaced());
+        securitySettingsDialog = new AlertDialog.Builder(this).setTitle("Security settings")
+                .setView(content).setPositiveButton("Done", null).create();
+        showTrackedDialog(securitySettingsDialog);
+    }
+
+    private EditText pinField(String hint) {
+        EditText input = field(hint, true);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12)});
+        return input;
+    }
+
+    private void showPinSetup() {
+        LinearLayout form = column();
+        form.setPadding(dp(20), dp(8), dp(20), 0);
+        EditText old = securityStore.hasPin() ? pinField("Current PIN") : null;
+        if (old != null) form.addView(old, spaced());
+        EditText pin = pinField("New PIN (6 to 12 digits)");
+        EditText repeat = pinField("Confirm new PIN");
+        form.addView(pin, spaced());
+        form.addView(repeat, spaced());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(old == null ? "Set app PIN" : "Change app PIN")
+                .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    try {
+                        if (old != null && !securityStore.verifyPin(old.getText().toString())) {
+                            old.setError("Current PIN is incorrect.");
+                            return;
+                        }
+                        String value = pin.getText().toString();
+                        if (!value.equals(repeat.getText().toString())) {
+                            repeat.setError("PINs do not match.");
+                            return;
+                        }
+                        securityStore.setPin(value);
+                        refreshSecureFlag();
+                        dialog.dismiss();
+                        showSecuritySettings();
+                    } catch (Exception error) {
+                        pin.setError(error.getMessage());
+                    }
+                }));
+        showTrackedDialog(dialog);
+    }
+
+    private void showRemovePin() {
+        EditText current = pinField("Current PIN");
+        LinearLayout form = column();
+        form.setPadding(dp(20), dp(8), dp(20), 0);
+        form.addView(text(securityStore.hasBiometrics()
+                ? "Biometrics will still unlock the app."
+                : "This will turn off the app lock.", 13, MUTED));
+        form.addView(current, spaced());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Remove app PIN")
+                .setView(form).setNegativeButton("Cancel", null).setPositiveButton("Remove", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    try {
+                        if (!securityStore.verifyPin(current.getText().toString())) {
+                            current.setError("Current PIN is incorrect.");
+                            return;
+                        }
+                        securityStore.removePin();
+                        refreshSecureFlag();
+                        dialog.dismiss();
+                        showSecuritySettings();
+                    } catch (Exception error) {
+                        current.setError(error.getMessage());
+                    }
+                }));
+        showTrackedDialog(dialog);
+    }
+
+    private void enableBiometrics() {
+        if (BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                != BiometricManager.BIOMETRIC_SUCCESS) {
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("Biometrics unavailable")
+                    .setMessage("Set up fingerprint or face unlock in Android Settings, then try again.")
+                    .setPositiveButton("OK", null).create());
+            return;
+        }
+        enablingBiometrics = true;
+        promptBusy = true;
+        biometricPrompt.authenticate(new BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Enable biometrics for androidKVM")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                .setNegativeButtonText("Cancel").build());
     }
 
     private void buildUi() {
@@ -174,6 +544,7 @@ public final class MainActivity extends Activity {
         });
         loginPage.addView(root);
         setContentView(loginPage);
+        resumePage = loginPage;
 
         LinearLayout brand = row();
         ImageView mascot = new ImageView(this);
@@ -186,7 +557,12 @@ public final class MainActivity extends Activity {
         title.setTypeface(null, 1);
         brandText.addView(title);
         brandText.addView(text("Your KVMs, in your pocket", 12, MUTED));
-        brand.addView(brandText);
+        brand.addView(brandText, new LinearLayout.LayoutParams(0, -2, 1));
+        Button homeMenu = compactButton("⋮");
+        homeMenu.setTextSize(28);
+        homeMenu.setContentDescription("More options");
+        homeMenu.setOnClickListener(this::showOverflow);
+        brand.addView(homeMenu, new LinearLayout.LayoutParams(dp(44), dp(48)));
         root.addView(brand);
         LinearLayout tabs = row();
         kvmTab = button("KVMs", ACCENT, BG);
@@ -324,6 +700,11 @@ public final class MainActivity extends Activity {
         power.setContentDescription("Power controls");
         power.setOnClickListener(view -> showPowerDialog());
         toolbar.addView(power, new LinearLayout.LayoutParams(dp(42), dp(46)));
+        Button consoleMenu = compactButton("⋮");
+        consoleMenu.setTextSize(25);
+        consoleMenu.setContentDescription("More options");
+        consoleMenu.setOnClickListener(this::showOverflow);
+        toolbar.addView(consoleMenu, new LinearLayout.LayoutParams(dp(38), dp(46)));
         consolePage.addView(toolbar);
 
         videoArea = new FrameLayout(this);
@@ -570,12 +951,12 @@ public final class MainActivity extends Activity {
         row.addView(offButton, offLayout);
         content.addView(row, spaced());
         onButton.setOnClickListener(view -> setPower(true));
-        offButton.setOnClickListener(view -> new AlertDialog.Builder(this)
+        offButton.setOnClickListener(view -> showTrackedDialog(new AlertDialog.Builder(this)
                 .setTitle("Shut down remote computer?")
                 .setMessage("This presses its power button briefly.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Shut down", (dialog, which) -> setPower(false))
-                .show());
+                .create()));
         ProfileStore.Profile wolProfile = activeWakeProfile();
         Button wake = button("Wake via WOL", SURFACE, KEY_ACCENT);
         TextView wakeStatus = text(wolProfile == null
@@ -591,12 +972,11 @@ public final class MainActivity extends Activity {
                 .setView(content)
                 .setNegativeButton("Close", null)
                 .create();
-        dialog.setOnDismissListener(ignored -> {
+        showTrackedDialog(dialog, () -> {
             powerStatus = null;
             onButton = null;
             offButton = null;
         });
-        dialog.show();
         refreshPower();
     }
 
@@ -619,7 +999,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showMouseModeDialog() {
-        new AlertDialog.Builder(this)
+        showTrackedDialog(new AlertDialog.Builder(this)
                 .setTitle("Mouse control")
                 .setSingleChoiceItems(new String[]{"Touch screen", "Trackpad"}, trackpadMode ? 1 : 0,
                         (dialog, choice) -> {
@@ -630,7 +1010,7 @@ public final class MainActivity extends Activity {
                             dialog.dismiss();
                         })
                 .setNegativeButton("Cancel", null)
-                .show();
+                .create());
     }
 
     private void resetKeyboardComposition() {
@@ -671,7 +1051,7 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams removeSize = new LinearLayout.LayoutParams(dp(84), dp(44));
             removeSize.leftMargin = dp(8);
             actions.addView(remove, removeSize);
-            remove.setOnClickListener(view -> new AlertDialog.Builder(this)
+            remove.setOnClickListener(view -> showTrackedDialog(new AlertDialog.Builder(this)
                     .setTitle("Remove saved KVM?")
                     .setMessage(profile.address + " (" + profile.user + ")")
                     .setNegativeButton("Cancel", null)
@@ -688,7 +1068,7 @@ public final class MainActivity extends Activity {
                         } catch (Exception error) {
                             showMessage("Could not remove saved KVM.");
                         }
-                    }).show());
+                    }).create()));
             item.addView(actions, spaced());
             if (profile.wolMac.isEmpty()) {
                 Button setupWol = button("Set up Wake-on-LAN", SURFACE, TEXT);
@@ -755,7 +1135,7 @@ public final class MainActivity extends Activity {
                         Toast.makeText(this, "Could not save WOL settings.", Toast.LENGTH_LONG).show();
                     }
                 }));
-        dialog.show();
+        showTrackedDialog(dialog);
     }
 
     private ProfileStore.Profile activeWakeProfile() {
@@ -841,14 +1221,17 @@ public final class MainActivity extends Activity {
                     }
                     passwordInput.setText("");
                     renderSavedProfiles();
-                    setContentView(consolePage);
+                    resumePage = consolePage;
+                    if (!locked) setContentView(consolePage);
                     loginButton.setEnabled(true);
                     showMessage(finalSaveError == null ? "Connected" : finalSaveError);
                     if (finalSaveError != null) Toast.makeText(this, finalSaveError, Toast.LENGTH_LONG).show();
-                    startVideo(next);
-                    handler.removeCallbacks(powerPoll);
-                    handler.post(powerPoll);
-                    remoteInput.postDelayed(() -> {
+                    if (!locked) {
+                        startVideo(next);
+                        handler.removeCallbacks(powerPoll);
+                        handler.post(powerPoll);
+                    }
+                    if (!locked) remoteInput.postDelayed(() -> {
                         remoteInput.requestFocus();
                         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
                         if (keyboard != null) keyboard.showSoftInput(remoteInput, InputMethodManager.SHOW_IMPLICIT);
@@ -881,9 +1264,10 @@ public final class MainActivity extends Activity {
     }
 
     private void showCertificateDialog(String address, String fingerprint, boolean changed) {
+        if (locked) return;
         loginButton.setEnabled(true);
         showMessage("Trust confirmation required");
-        new AlertDialog.Builder(this)
+        showTrackedDialog(new AlertDialog.Builder(this)
                 .setTitle(changed ? "KVM certificate changed" : "Trust this KVM?")
                 .setMessage(changed
                         ? "The certificate for " + address + " changed since you last trusted it. Continue only if you expect this change."
@@ -895,7 +1279,7 @@ public final class MainActivity extends Activity {
                     trustedFingerprint = fingerprint;
                     login();
                 })
-                .show();
+                .create());
     }
 
     private void startVideo(PikvmClient active) {
@@ -1441,6 +1825,7 @@ public final class MainActivity extends Activity {
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(remoteInput.getWindowToken(), 0);
         setContentView(loginPage);
+        resumePage = loginPage;
         showMessage("Disconnected");
         if (old != null) io.execute(old::logout);
     }

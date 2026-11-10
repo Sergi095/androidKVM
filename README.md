@@ -31,6 +31,18 @@ look different.
 4. Tap a saved KVM to reconnect. Use the keyboard button to show or hide your
    phone's keyboard and its extra keys.
 
+### App lock
+
+Tap **⋮ → Security settings** on the KVM list or console to set a 6–12 digit
+app PIN, enable biometrics, or enable both. With both enabled, either method
+unlocks the app. Biometric-only mode also accepts the Android screen lock as a
+fallback. Once enabled, the lock appears when you open the app and whenever
+you return after leaving it. The app hides its contents from Android's recent
+app previews while the lock is enabled. Use **⋮ → Lock now** to lock it without
+leaving. The PIN is stored as a salted hash; biometric checks use Android's
+system prompt. If you forget a PIN-only lock, clearing the app's data removes
+the lock and saved KVMs.
+
 ## Updating an installed app
 
 Open the **Updates** tab and tap **Check for updates**. When a newer version is
@@ -50,6 +62,7 @@ signing key and cannot update a release installation.
 
 - Log in with the KVM web account. Save several KVM profiles and tap one to
   reconnect; saved passwords are encrypted with a key in Android Keystore.
+- Lock the app on every reopen with a PIN, biometrics, or either method.
 - Pick a KVM from a compact device list or add a new one. The dark console
   keeps the video prominent, with quick keyboard, mouse-mode, and power controls.
 - Check for updates in the app and download verified release APKs directly from
