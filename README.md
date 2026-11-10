@@ -40,6 +40,12 @@ flowchart LR
 
 Saved KVM passwords are encrypted on your phone. With the app lock enabled, Android hides the app's recent-screen preview. Biometric-only mode also allows your Android screen lock as a fallback.
 
+## References
+
+- **PiKVM:** [HTTP API](https://docs.pikvm.org/api/) · [input WebSocket source](https://github.com/pikvm/kvmd/blob/master/kvmd/apps/kvmd/api/hid.py) · [video modes](https://docs.pikvm.org/video/) · [Wake-on-LAN](https://docs.pikvm.org/wol/)
+- **NanoKVM:** [H.264 Direct source](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/desktop/screen/direct.worker.ts) · [WOL API source](https://github.com/sipeed/NanoKVM/blob/main/server/router/network.go) · [PiKVM bridge](https://github.com/Sergi095/nanokvm-pikvm-bridge)
+- **Android:** [Biometric Prompt guide](https://developer.android.com/identity/sign-in/biometric-auth)
+
 ## For developers
 
 Build, release signing, and protocol notes are in [Development](docs/DEVELOPMENT.md). This project is [MIT licensed](LICENSE); the raccoon icon is original and included under the same license.
