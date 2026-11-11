@@ -21,7 +21,7 @@ Builds:
 
 AllowedAPKSigningKeys: 892860904d73e752a99aaeca5ceaf11a1887d407cf9bb50b184fecf5d3d3cdd6
 
-AutoUpdateMode: Version %v
+AutoUpdateMode: Version
 UpdateCheckMode: Tags
 CurrentVersion: 0.2.5
 CurrentVersionCode: 30
