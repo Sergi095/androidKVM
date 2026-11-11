@@ -11,7 +11,7 @@ AutoName: androidKVM
 
 RepoType: git
 Repo: https://github.com/Sergi095/androidKVM.git
-Binaries:
+Binaries: 
   https://github.com/Sergi095/androidKVM/releases/download/v%v/androidKVM-fdroid-v%v.apk
 
 Builds:
