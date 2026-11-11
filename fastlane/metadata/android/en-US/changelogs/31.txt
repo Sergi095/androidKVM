@@ -1,0 +1,1 @@
+Builds both release variants with Java 21 so F-Droid can reproduce the signed APK and preserve in-place updates from GitHub installs. KVM controls and the keyboard layout remain the same.

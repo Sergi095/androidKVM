@@ -15,15 +15,13 @@ The source repository includes F-Droid listing text, an icon, and two screenshot
 under `fastlane/metadata/android/en-US/`. The terminal asset sources and hashes
 are recorded in [terminal/PROVENANCE.md](../app/src/main/assets/terminal/PROVENANCE.md).
 
-The v0.2.5 tag, signed reference APK, and F-Droid build recipe are ready. The
-recipe passed a local `fdroid build`: F-Droid rebuilt from the tagged source,
-compared it with the published signed APK, and accepted the signing key. This
-is the reproducible-build route that can preserve installed app data and allow
-in-place updates from the GitHub version. F-Droid's own build infrastructure
-must reproduce the same result before listing the app.
+The F-Droid build recipe uses the reproducible-build route to preserve app data
+and allow in-place updates from the GitHub version. Both release APKs are built
+with Java 21 to match F-Droid's build environment. F-Droid verifies that its
+source build matches the signed reference APK before listing the app.
 
-To request inclusion, submit the [tested build recipe](../fdroid/metadata/org.androidkvm.app.yml)
-as `metadata/org.androidkvm.app.yml` to `fdroid/fdroiddata` on GitLab.
+The [build recipe](../fdroid/metadata/org.androidkvm.app.yml) is submitted as
+`metadata/org.androidkvm.app.yml` to `fdroid/fdroiddata` on GitLab.
 
 The repository was created in November 2026. F-Droid's inclusion policy normally
 expects three months of development unless there is evidence of users or another
