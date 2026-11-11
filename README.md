@@ -25,7 +25,7 @@ flowchart LR
 2. **Add a KVM.** Select PiKVM or NanoKVM and enter the device's own address and web login. PiKVM uses HTTPS. NanoKVM accepts HTTPS or its stock HTTP address; enter `http://` explicitly for HTTP. Include a port when needed.
 3. **Connect.** Save the KVM to reconnect with one tap. If Android asks you to trust its certificate, confirm only if it is the device you intended to reach.
 
-If you previously used the [NanoKVM PiKVM bridge](https://github.com/Sergi095/nanokvm-pikvm-bridge), add the NanoKVM's own address as a new **NanoKVM** entry. Remove the old entry after testing the direct connection.
+If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own address as a new **NanoKVM** entry. Remove the old entry after testing the direct connection.
 
 ## Controls at a glance
 
