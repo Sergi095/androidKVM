@@ -15,19 +15,15 @@ The source repository includes F-Droid listing text, an icon, and two screenshot
 under `fastlane/metadata/android/en-US/`. The terminal asset sources and hashes
 are recorded in [terminal/PROVENANCE.md](../app/src/main/assets/terminal/PROVENANCE.md).
 
-Before requesting inclusion in the official F-Droid catalog:
+The v0.2.5 tag, signed reference APK, and F-Droid build recipe are ready. The
+recipe passed a local `fdroid build`: F-Droid rebuilt from the tagged source,
+compared it with the published signed APK, and accepted the signing key. This
+is the reproducible-build route that can preserve installed app data and allow
+in-place updates from the GitHub version. F-Droid's own build infrastructure
+must reproduce the same result before listing the app.
 
-1. Tag a release that includes the F-Droid flavor and its version code.
-2. Test the [draft build recipe](../fdroid/metadata/org.androidkvm.app.yml)
-   with `fdroidserver`, then submit it as `metadata/org.androidkvm.app.yml`
-   to `fdroid/fdroiddata` on GitLab.
-3. Resolve signing continuity. A default F-Droid-signed APK cannot replace the
-   GitHub-signed APK with the same application ID. For in-place updates, publish
-   a separately built, developer-signed `fdroid` APK and prove its unsigned
-   contents match F-Droid's rebuild using `Binaries` and
-   `AllowedAPKSigningKeys`. A local signed-versus-unsigned rebuild comparison
-   passed with `apksigcopier`; F-Droid's independent build still needs to pass.
-   Otherwise, users must reinstall and re-add their saved KVMs.
+To request inclusion, submit the [tested build recipe](../fdroid/metadata/org.androidkvm.app.yml)
+as `metadata/org.androidkvm.app.yml` to `fdroid/fdroiddata` on GitLab.
 
 The repository was created in November 2026. F-Droid's inclusion policy normally
 expects three months of development unless there is evidence of users or another
