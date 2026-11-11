@@ -1,12 +1,10 @@
 package org.androidkvm.app;
 
 import android.app.AlertDialog;
-import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.net.http.SslCertificate;
 import android.net.http.SslError;
-import android.net.Uri;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -22,7 +20,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
 import android.text.InputType;
 import android.text.InputFilter;
 import android.view.Gravity;
@@ -61,7 +58,6 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
-import androidx.core.content.FileProvider;
 import androidx.core.content.ContextCompat;
 import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
@@ -70,7 +66,6 @@ import androidx.fragment.app.FragmentActivity;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
-import java.io.File;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.security.MessageDigest;
@@ -102,7 +97,6 @@ public final class MainActivity extends FragmentActivity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ExecutorService mouseIo = Executors.newSingleThreadExecutor();
-    private final ExecutorService updatesIo = Executors.newSingleThreadExecutor();
     private final ExecutorService wolIo = Executors.newSingleThreadExecutor();
     private final ExecutorService securityIo = Executors.newSingleThreadExecutor();
     private final StringBuilder pendingText = new StringBuilder();
@@ -146,14 +140,9 @@ public final class MainActivity extends FragmentActivity {
     private int videoWidth, videoHeight;
     private RemoteInput remoteInput;
     private TextView message, videoStatus, powerStatus, consoleTitle, sectionTitle;
-    private TextView updateStatus;
     private Button loginButton, onButton, offButton, addKvmButton, closeFormButton;
-    private Button kvmTab, updatesTab, checkUpdateButton, installUpdateButton;
-    private UpdateManager updateManager;
-    private UpdateManager.Release latestRelease;
-    private File pendingInstall;
-    private boolean updateBusy;
-    private static final int INSTALL_PERMISSION_REQUEST = 1701;
+    private Button kvmTab, updatesTab;
+    private UpdateController updateController;
     private boolean trackpadMode;
     private boolean fillScreen;
     private int screenScalePercent = 100;
@@ -175,7 +164,6 @@ public final class MainActivity extends FragmentActivity {
         profileStore = new ProfileStore(this);
         fillScreen = getSharedPreferences("video_preferences", MODE_PRIVATE).getBoolean("fill_screen", false);
         securityStore = new SecurityStore(this);
-        updateManager = new UpdateManager(this);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -271,7 +259,7 @@ public final class MainActivity extends FragmentActivity {
         stopVideo();
         io.shutdownNow();
         mouseIo.shutdownNow();
-        updatesIo.shutdownNow();
+        if (updateController != null) updateController.close();
         wolIo.shutdownNow();
         securityIo.shutdownNow();
         super.onDestroy();
@@ -1593,6 +1581,7 @@ public final class MainActivity extends FragmentActivity {
         updateTabSize.leftMargin = dp(8);
         tabs.addView(updatesTab, updateTabSize);
         root.addView(tabs, spaced());
+        if (BuildConfig.FDROID_BUILD) tabs.setVisibility(View.GONE);
         kvmHome = column();
         root.addView(kvmHome);
         updatesHome = column();
@@ -1671,22 +1660,25 @@ public final class MainActivity extends FragmentActivity {
         kvmHome.addView(message, spaced());
         renderSavedProfiles();
 
-        LinearLayout updatePanel = panel();
-        updatesHome.addView(updatePanel, spaced());
-        TextView updateTitle = text("App updates", 20, TEXT);
-        updateTitle.setTypeface(null, 1);
-        updatePanel.addView(updateTitle);
-        updatePanel.addView(text("Installed: " + BuildConfig.VERSION_NAME, 13, MUTED), spaced());
-        updatePanel.addView(text("Source: github.com/Sergi095/androidKVM", 13, MUTED), spaced());
-        updateStatus = text("Check for a signed APK from the project's GitHub Releases.", 14, TEXT);
-        updatePanel.addView(updateStatus, spaced());
-        checkUpdateButton = button("Check for updates", SURFACE, TEXT);
-        checkUpdateButton.setOnClickListener(view -> checkForUpdates());
-        updatePanel.addView(checkUpdateButton, spaced());
-        installUpdateButton = button("Download and install", ACCENT, BG);
-        installUpdateButton.setVisibility(View.GONE);
-        installUpdateButton.setOnClickListener(view -> downloadOrInstallUpdate());
-        updatePanel.addView(installUpdateButton, spaced());
+        if (!BuildConfig.FDROID_BUILD) {
+            LinearLayout updatePanel = panel();
+            updatesHome.addView(updatePanel, spaced());
+            TextView updateTitle = text("App updates", 20, TEXT);
+            updateTitle.setTypeface(null, 1);
+            updatePanel.addView(updateTitle);
+            updatePanel.addView(text("Installed: " + BuildConfig.VERSION_NAME, 13, MUTED), spaced());
+            updatePanel.addView(text("Source: github.com/Sergi095/androidKVM", 13, MUTED), spaced());
+            TextView updateStatus = text("Check for a signed APK from the project's GitHub Releases.", 14, TEXT);
+            updatePanel.addView(updateStatus, spaced());
+            Button checkUpdateButton = button("Check for updates", SURFACE, TEXT);
+            updatePanel.addView(checkUpdateButton, spaced());
+            Button installUpdateButton = button("Download and install", ACCENT, BG);
+            installUpdateButton.setVisibility(View.GONE);
+            updatePanel.addView(installUpdateButton, spaced());
+            updateController = new UpdateController(this, updateStatus, checkUpdateButton, installUpdateButton);
+            checkUpdateButton.setOnClickListener(view -> updateController.checkForUpdates());
+            installUpdateButton.setOnClickListener(view -> updateController.downloadOrInstallUpdate());
+        }
 
         consolePage = column();
         consolePage.setBackgroundColor(CONSOLE_BG);
@@ -1780,6 +1772,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void showHomeTab(boolean updates) {
+        if (BuildConfig.FDROID_BUILD) updates = false;
         kvmHome.setVisibility(updates ? View.GONE : View.VISIBLE);
         updatesHome.setVisibility(updates ? View.VISIBLE : View.GONE);
         kvmTab.setBackground(rounded(updates ? PANEL : ACCENT));
@@ -1787,102 +1780,13 @@ public final class MainActivity extends FragmentActivity {
         updatesTab.setBackground(rounded(updates ? ACCENT : PANEL));
         updatesTab.setTextColor(updates ? BG : TEXT);
         loginPage.smoothScrollTo(0, 0);
-        if (updates && latestRelease == null && !updateBusy) checkForUpdates();
-    }
-
-    private void checkForUpdates() {
-        if (updateBusy) return;
-        updateBusy = true;
-        latestRelease = null;
-        pendingInstall = null;
-        checkUpdateButton.setEnabled(false);
-        installUpdateButton.setVisibility(View.GONE);
-        updateStatus.setText("Checking GitHub Releases…");
-        updatesIo.execute(() -> {
-            try {
-                UpdateManager.Release release = updateManager.latest();
-                boolean newer = updateManager.newerThanInstalled(release);
-                runOnUiThread(() -> {
-                    updateBusy = false;
-                    checkUpdateButton.setEnabled(true);
-                    latestRelease = release;
-                    updateStatus.setText(newer
-                            ? "Version " + release.version + " is available (" + (release.size / 1024) + " KB)."
-                            : "You're up to date. Latest release: " + release.version + ".");
-                    installUpdateButton.setVisibility(newer ? View.VISIBLE : View.GONE);
-                });
-            } catch (Exception error) {
-                runOnUiThread(() -> {
-                    updateBusy = false;
-                    checkUpdateButton.setEnabled(true);
-                    updateStatus.setText("Could not check for updates: " + error.getMessage());
-                });
-            }
-        });
-    }
-
-    private void downloadOrInstallUpdate() {
-        if (pendingInstall != null && pendingInstall.isFile()) {
-            installDownloadedUpdate();
-            return;
-        }
-        UpdateManager.Release release = latestRelease;
-        if (release == null || updateBusy || !updateManager.newerThanInstalled(release)) return;
-        updateBusy = true;
-        checkUpdateButton.setEnabled(false);
-        installUpdateButton.setEnabled(false);
-        updateStatus.setText("Downloading from GitHub…");
-        updatesIo.execute(() -> {
-            try {
-                File apk = updateManager.download(release, percent -> runOnUiThread(() ->
-                        updateStatus.setText("Downloading from GitHub… " + percent + "%")));
-                runOnUiThread(() -> {
-                    updateBusy = false;
-                    checkUpdateButton.setEnabled(true);
-                    installUpdateButton.setEnabled(true);
-                    installUpdateButton.setText("Install downloaded APK");
-                    pendingInstall = apk;
-                    updateStatus.setText("Version " + release.version + " downloaded and verified.");
-                    installDownloadedUpdate();
-                });
-            } catch (Exception error) {
-                runOnUiThread(() -> {
-                    updateBusy = false;
-                    checkUpdateButton.setEnabled(true);
-                    installUpdateButton.setEnabled(true);
-                    updateStatus.setText("Update failed: " + error.getMessage());
-                });
-            }
-        });
-    }
-
-    private void installDownloadedUpdate() {
-        if (pendingInstall == null || !pendingInstall.isFile()) return;
-        if (!getPackageManager().canRequestPackageInstalls()) {
-            updateStatus.setText("Allow androidKVM to install apps, then return to finish the update.");
-            Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:" + getPackageName()));
-            try { startActivityForResult(settings, INSTALL_PERMISSION_REQUEST); }
-            catch (Exception error) { updateStatus.setText("Open Android settings and allow installs from androidKVM."); }
-            return;
-        }
-        try {
-            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".updates", pendingInstall);
-            Intent install = new Intent(Intent.ACTION_VIEW);
-            install.setDataAndType(uri, "application/vnd.android.package-archive");
-            install.setClipData(ClipData.newRawUri("androidKVM update", uri));
-            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(install);
-            updateStatus.setText("Confirm the update in Android's installer.");
-        } catch (Exception error) {
-            updateStatus.setText("Could not open Android's installer: " + error.getMessage());
-        }
+        if (updates && updateController != null && updateController.needsCheck())
+            updateController.checkForUpdates();
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == INSTALL_PERMISSION_REQUEST && getPackageManager().canRequestPackageInstalls())
-            installDownloadedUpdate();
+        if (updateController != null) updateController.onActivityResult(requestCode);
     }
 
     private void updateLoginKeyboardInset() {

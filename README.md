@@ -42,7 +42,7 @@ If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own
 | Power on or shut down | Tap **⏻** in the console. These buttons follow the KVM's reported power state. |
 | Wake a sleeping PC | On its saved KVM card, open **WOL settings** and enter the **PC's wired MAC address**. Then tap **⏻ → Wake via WOL**. PiKVM also needs [WOL configured on the device](https://docs.pikvm.org/wol/). |
 | Lock the app | Tap **⋮ → Security settings**. Choose a 6–12 digit PIN, biometrics, or both. Both means **either** can unlock. The lock appears whenever you reopen the app. |
-| Update | Open **Updates → Check for updates → Download and install**. Install over the existing app to keep saved KVMs. |
+| Update | For GitHub APKs, open **Updates → Check for updates → Download and install**. A future F-Droid build receives updates through F-Droid. |
 
 **WOL over VPN:** The KVM sends the wake packet on its own network. Your phone only needs to reach the KVM; it does not need a VPN broadcast IP.
 

@@ -5,14 +5,16 @@
 Requires JDK 17 and Android SDK platform 35. For a local test APK:
 
 ```sh
-./gradlew assembleDebug
+./gradlew assembleGithubDebug
 ```
 
-The debug APK is signed with a different key from releases, so it cannot update an installed release. Use a signed release APK for normal installation. The default KVM port is 443; add a different port to the address when needed.
+For a source-built F-Droid candidate, run `./gradlew assembleFdroidRelease` without signing secrets. The unsigned APK is in `app/build/outputs/apk/fdroid/release/`. The F-Droid variant omits the GitHub APK updater and its install permission; F-Droid manages its updates. See [F-Droid preparation](FDROID.md).
+
+The GitHub debug APK is signed with a different key from releases, so it cannot update an installed release. Use a signed release APK for normal installation. The default KVM port is 443; add a different port to the address when needed.
 
 ## Releases
 
-[GitHub Actions](../.github/workflows/android.yml) builds a debug APK on pushes and manual runs. A `v*` tag also builds a signed APK and uploads it to a GitHub Release. Set these repository secrets for tagged releases:
+[GitHub Actions](../.github/workflows/android.yml) builds a GitHub debug APK on pushes and manual runs. A `v*` tag also builds a signed GitHub APK and uploads it to a GitHub Release. Set these repository secrets for tagged releases:
 
 | Secret | Value |
 | --- | --- |

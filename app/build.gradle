@@ -2,6 +2,8 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseKeyFile = System.getenv('ANDROIDKVM_KEYSTORE')
+
 android {
     namespace 'org.androidkvm.app'
     compileSdk 35
@@ -14,15 +16,26 @@ android {
         applicationId 'org.androidkvm.app'
         minSdk 26
         targetSdk 35
-        versionCode 29
-        versionName '0.2.4'
+        versionCode 30
+        versionName '0.2.5'
+    }
+
+    flavorDimensions 'distribution'
+    productFlavors {
+        github {
+            dimension 'distribution'
+            buildConfigField 'boolean', 'FDROID_BUILD', 'false'
+        }
+        fdroid {
+            dimension 'distribution'
+            buildConfigField 'boolean', 'FDROID_BUILD', 'true'
+        }
     }
 
     signingConfigs {
         release {
-            def keyFile = System.getenv('ANDROIDKVM_KEYSTORE')
-            if (keyFile) {
-                storeFile file(keyFile)
+            if (releaseKeyFile) {
+                storeFile file(releaseKeyFile)
                 storePassword System.getenv('ANDROIDKVM_STORE_PASSWORD')
                 keyAlias System.getenv('ANDROIDKVM_KEY_ALIAS')
                 keyPassword System.getenv('ANDROIDKVM_KEY_PASSWORD')
@@ -33,7 +46,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.release
+            if (releaseKeyFile) signingConfig signingConfigs.release
         }
     }
 

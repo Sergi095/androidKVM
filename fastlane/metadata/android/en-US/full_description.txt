@@ -1,0 +1,7 @@
+androidKVM connects directly to your PiKVM or NanoKVM over a local network or VPN. No hosted relay or app account is required.
+
+Watch the computer screen and control its mouse with touch gestures. Use the Android keyboard with extra keys for Esc, Ctrl, Alt, Win/Command, arrows, F1–F12, and Delete.
+
+Save multiple KVM profiles, use power controls and Wake-on-LAN, and lock the app with a PIN or biometrics. NanoKVM connections also support device settings and terminal access.
+
+You need your own compatible PiKVM or NanoKVM device. Features vary by device and firmware version.

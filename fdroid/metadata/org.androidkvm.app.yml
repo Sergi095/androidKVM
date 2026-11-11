@@ -1,0 +1,27 @@
+Categories:
+  - Connectivity
+License: MIT
+AuthorName: Sergi095
+WebSite: https://github.com/Sergi095/androidKVM
+SourceCode: https://github.com/Sergi095/androidKVM
+IssueTracker: https://github.com/Sergi095/androidKVM/issues
+Changelog: https://github.com/Sergi095/androidKVM/releases
+
+RepoType: git
+Repo: https://github.com/Sergi095/androidKVM.git
+Binaries: https://github.com/Sergi095/androidKVM/releases/download/v%v/androidKVM-fdroid-v%v.apk
+
+Builds:
+  - versionName: 0.2.5
+    versionCode: 30
+    commit: v0.2.5
+    subdir: app
+    gradle:
+      - fdroid
+
+AllowedAPKSigningKeys: 892860904d73e752a99aaeca5ceaf11a1887d407cf9bb50b184fecf5d3d3cdd6
+
+AutoUpdateMode: Version %v
+UpdateCheckMode: Tags
+CurrentVersion: 0.2.5
+CurrentVersionCode: 30

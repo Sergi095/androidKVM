@@ -1,0 +1,1 @@
+Adds a source-buildable F-Droid variant without the GitHub updater. The GitHub APK keeps its in-app update flow. Both variants retain PiKVM and NanoKVM controls, the Termux-style keys, and the v0.2.4 key layout.

@@ -23,11 +23,11 @@ jobs:
       - name: Install Android SDK platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build installable test APK
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleGithubDebug
       - uses: actions/upload-artifact@v4
         with:
           name: androidKVM-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/github/debug/app-github-debug.apk
       - name: Prepare release signing key
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -45,12 +45,20 @@ jobs:
           ANDROIDKVM_STORE_PASSWORD: ${{ secrets.ANDROIDKVM_STORE_PASSWORD }}
           ANDROIDKVM_KEY_ALIAS: ${{ secrets.ANDROIDKVM_KEY_ALIAS }}
           ANDROIDKVM_KEY_PASSWORD: ${{ secrets.ANDROIDKVM_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleRelease
+        run: ./gradlew --no-daemon assembleGithubRelease
+      - name: Build signed F-Droid reference APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANDROIDKVM_STORE_PASSWORD: ${{ secrets.ANDROIDKVM_STORE_PASSWORD }}
+          ANDROIDKVM_KEY_ALIAS: ${{ secrets.ANDROIDKVM_KEY_ALIAS }}
+          ANDROIDKVM_KEY_PASSWORD: ${{ secrets.ANDROIDKVM_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleFdroidRelease
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk "androidKVM-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/github/release/app-github-release.apk "androidKVM-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/fdroid/release/app-fdroid-release.apk "androidKVM-fdroid-${GITHUB_REF_NAME}.apk"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" "androidKVM-${GITHUB_REF_NAME}.apk" --clobber
+          gh release upload "$GITHUB_REF_NAME" "androidKVM-${GITHUB_REF_NAME}.apk" "androidKVM-fdroid-${GITHUB_REF_NAME}.apk" --clobber

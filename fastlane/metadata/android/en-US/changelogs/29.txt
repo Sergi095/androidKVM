@@ -1,0 +1,1 @@
+Restores the preferred key layout: PGUP stays fixed, WIN/Command starts the sliding row, and DEL ends it. Includes touch gestures, pinch zoom, plain keyboard input, and PiKVM and NanoKVM support.
