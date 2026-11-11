@@ -4,7 +4,7 @@ package org.androidkvm.app;
 final class ExtraKeyLayout {
     static final String[][] FIRST = {
             {"ESC", "Escape"}, {"/", "Slash"}, {"−", "Minus"},
-            {"HOME", "Home"}, {"↑", "ArrowUp"}, {"END", "End"}, {"PGUP", "PageUp"}
+            {"HOME", "Home"}, {"↑", "ArrowUp"}, {"END", "End"}, {"DEL", "Delete"}
     };
     static final String[][] SECOND = {
             {"TAB", "Tab"}, {"CTRL", "ControlLeft"}, {"ALT", "AltLeft"},
@@ -16,12 +16,12 @@ final class ExtraKeyLayout {
         String[][] keys = new String[14][2];
         keys[0][0] = "WIN/⌘";
         keys[0][1] = "MetaLeft";
+        keys[1][0] = "PGUP";
+        keys[1][1] = "PageUp";
         for (int number = 1; number <= 12; number++) {
-            keys[number][0] = "F" + number;
-            keys[number][1] = "F" + number;
+            keys[number + 1][0] = "F" + number;
+            keys[number + 1][1] = "F" + number;
         }
-        keys[13][0] = "DEL";
-        keys[13][1] = "Delete";
         return keys;
     }
 
