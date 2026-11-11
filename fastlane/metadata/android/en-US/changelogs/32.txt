@@ -1,0 +1,1 @@
+Removes Google Play dependency metadata from the APK signing block so F-Droid can verify the signed release. The KVM controls and keyboard layout are unchanged.

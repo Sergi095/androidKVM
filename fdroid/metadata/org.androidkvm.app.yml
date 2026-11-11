@@ -15,9 +15,9 @@ Binaries:
   https://github.com/Sergi095/androidKVM/releases/download/v%v/androidKVM-fdroid-v%v.apk
 
 Builds:
-  - versionName: 0.2.6
-    versionCode: 31
-    commit: v0.2.6
+  - versionName: 0.2.7
+    versionCode: 32
+    commit: v0.2.7
     subdir: app
     gradle:
       - fdroid
@@ -26,5 +26,5 @@ AllowedAPKSigningKeys: 892860904d73e752a99aaeca5ceaf11a1887d407cf9bb50b184fecf5d
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 0.2.6
-CurrentVersionCode: 31
+CurrentVersion: 0.2.7
+CurrentVersionCode: 32
