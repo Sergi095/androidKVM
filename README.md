@@ -19,7 +19,7 @@ flowchart LR
 
 *Screenshots use a demo KVM; your Android keyboard may look different.*
 
-**NanoKVM tested configuration:** original NanoKVM, application **2.5.2**, system image **v1.4.2**. Other NanoKVM models and firmware versions have not been verified.
+**NanoKVM tested configuration:** NanoKVM Cube (Lite/Full variant not recorded), application **2.5.2**, system image **v1.4.2**. Other NanoKVM models and firmware versions have not been verified.
 
 ## Get started
 
