@@ -25,11 +25,12 @@ import javax.crypto.spec.GCMParameterSpec;
 /** Saved KVMs. Only encrypted passwords are written to app preferences. */
 final class ProfileStore {
     static final class Profile {
-        final String id, address, user, pin, iv, encryptedPassword, wolMac, wolGpioChannel;
+        final String id, type, address, user, pin, iv, encryptedPassword, wolMac, wolGpioChannel;
 
-        Profile(String id, String address, String user, String pin, String iv, String encryptedPassword,
+        Profile(String id, String type, String address, String user, String pin, String iv, String encryptedPassword,
                 String wolMac, String wolGpioChannel) {
             this.id = id;
+            this.type = type;
             this.address = address;
             this.user = user;
             this.pin = pin;
@@ -40,7 +41,7 @@ final class ProfileStore {
         }
 
         JSONObject toJson() throws JSONException {
-            return new JSONObject().put("id", id).put("address", address).put("user", user)
+            return new JSONObject().put("id", id).put("type", type).put("address", address).put("user", user)
                     .put("pin", pin).put("iv", iv).put("password", encryptedPassword)
                     .put("wolMac", wolMac).put("wolGpioChannel", wolGpioChannel);
         }
@@ -59,7 +60,7 @@ final class ProfileStore {
             JSONArray data = new JSONArray(preferences.getString("profiles", "[]"));
             for (int n = 0; n < data.length(); n++) {
                 JSONObject item = data.getJSONObject(n);
-                profiles.add(new Profile(item.getString("id"), item.getString("address"),
+                profiles.add(new Profile(item.getString("id"), item.optString("type", "pikvm"), item.getString("address"),
                         item.getString("user"), item.optString("pin"), item.getString("iv"),
                         item.getString("password"), item.optString("wolMac"),
                         item.optString("wolGpioChannel")));
@@ -70,13 +71,13 @@ final class ProfileStore {
         return profiles;
     }
 
-    synchronized void save(String address, String user, String pin, String password) throws Exception {
+    synchronized void save(String type, String address, String user, String pin, String password) throws Exception {
         List<Profile> profiles = list();
         String id = UUID.randomUUID().toString();
         String wolMac = "", wolGpioChannel = "";
         for (int n = 0; n < profiles.size(); n++) {
             Profile existing = profiles.get(n);
-            if (existing.address.equals(address) && existing.user.equals(user)) {
+            if (existing.type.equals(type) && existing.address.equals(address) && existing.user.equals(user)) {
                 id = existing.id;
                 wolMac = existing.wolMac;
                 wolGpioChannel = existing.wolGpioChannel;
@@ -90,7 +91,7 @@ final class ProfileStore {
         String iv = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP);
         String encrypted = Base64.encodeToString(
                 cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
-        profiles.add(0, new Profile(id, address, user, pin, iv, encrypted,
+        profiles.add(0, new Profile(id, type, address, user, pin, iv, encrypted,
                 wolMac, wolGpioChannel));
         write(profiles);
     }
@@ -100,7 +101,7 @@ final class ProfileStore {
         for (int n = 0; n < profiles.size(); n++) {
             Profile old = profiles.get(n);
             if (!old.id.equals(id)) continue;
-            profiles.set(n, new Profile(old.id, old.address, old.user, old.pin, old.iv,
+            profiles.set(n, new Profile(old.id, old.type, old.address, old.user, old.pin, old.iv,
                     old.encryptedPassword, mac, gpioChannel));
             write(profiles);
             return;

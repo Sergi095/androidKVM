@@ -14,6 +14,7 @@ import java.net.URISyntaxException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
+import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -44,7 +45,7 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 /** Small PiKVM HTTP client. All methods run off the UI thread. */
-final class PikvmClient {
+class PikvmClient {
     static final class ApiException extends IOException {
         final int status;
         ApiException(int status, String message) {
@@ -62,20 +63,22 @@ final class PikvmClient {
         }
     }
 
-    private final String baseUrl;
-    private final SSLSocketFactory pinnedFactory;
-    private final X509TrustManager pinTrust;
-    private final boolean pinned;
-    private volatile String cookie;
+    protected final String baseUrl;
+    protected final SSLSocketFactory pinnedFactory;
+    protected final X509TrustManager pinTrust;
+    protected final boolean pinned;
+    protected final String certificatePin;
+    protected volatile String cookie;
     private OkHttpClient socketClient;
     private volatile WebSocket events;
     private volatile boolean eventsReady;
     private Boolean directTextSupported;
-    private String nativeBaseUrl;
-    private String nativeCookie;
-
     PikvmClient(String address, String fingerprint) throws Exception {
-        baseUrl = normalizeAddress(address);
+        this(address, fingerprint, false);
+    }
+
+    PikvmClient(String address, String fingerprint, boolean allowHttp) throws Exception {
+        baseUrl = normalizeAddress(address, allowHttp);
         String supplied = fingerprint.trim();
         if (supplied.contains("=")) supplied = supplied.substring(supplied.lastIndexOf('=') + 1);
         String pin = supplied.replaceAll("[^A-Fa-f0-9]", "").toUpperCase(Locale.ROOT);
@@ -83,6 +86,10 @@ final class PikvmClient {
             throw new IllegalArgumentException("Certificate fingerprint must be 64 hex digits (SHA-256).");
         }
         pinned = !pin.isEmpty();
+        certificatePin = pin;
+        if (pinned && baseUrl.startsWith("http://")) {
+            throw new IllegalArgumentException("Certificate trust applies only to HTTPS connections.");
+        }
         if (pinned) {
             SSLContext context = SSLContext.getInstance("TLS");
             pinTrust = new PinTrustManager(pin);
@@ -95,16 +102,21 @@ final class PikvmClient {
     }
 
     static String normalizeAddress(String address) throws URISyntaxException {
+        return normalizeAddress(address, false);
+    }
+
+    static String normalizeAddress(String address, boolean allowHttp) throws URISyntaxException {
         String value = address.trim();
         if (!value.contains("://")) value = "https://" + value;
         URI uri = new URI(value);
-        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
+        boolean https = "https".equalsIgnoreCase(uri.getScheme());
+        if ((!https && !(allowHttp && "http".equalsIgnoreCase(uri.getScheme()))) || uri.getHost() == null
                 || uri.getUserInfo() != null || uri.getRawQuery() != null
                 || uri.getRawFragment() != null || (uri.getPath() != null && !uri.getPath().isEmpty() && !"/".equals(uri.getPath()))) {
-            throw new IllegalArgumentException("Enter a PiKVM host or HTTPS URL without a path.");
+            throw new IllegalArgumentException("Enter a KVM host or HTTP(S) URL without a path.");
         }
-        int port = uri.getPort() < 0 ? 443 : uri.getPort();
-        return new URI("https", null, uri.getHost(), port, null, null, null).toString();
+        int port = uri.getPort() < 0 ? (https ? 443 : 80) : uri.getPort();
+        return new URI(https ? "https" : "http", null, uri.getHost(), port, null, null, null).toString();
     }
 
     /** Reads the presented certificate without completing a trusted connection or sending credentials. */
@@ -184,7 +196,7 @@ final class PikvmClient {
         }
     }
 
-    private static byte[] readLimited(InputStream input, int limit) throws IOException {
+    static byte[] readLimited(InputStream input, int limit) throws IOException {
         try (InputStream stream = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[4096];
             int count;
@@ -203,7 +215,21 @@ final class PikvmClient {
                 "application/x-www-form-urlencoded; charset=utf-8");
         try {
             int status = connection.getResponseCode();
-            if (status != 200) throw new ApiException(status, "Login failed (HTTP " + status + ")");
+            if (status != 200) {
+                String reason = "PiKVM login failed";
+                try {
+                    InputStream error = connection.getErrorStream();
+                    if (error != null) {
+                        JSONObject response = new JSONObject(new String(readLimited(error, 65536),
+                                StandardCharsets.UTF_8));
+                        JSONObject result = response.optJSONObject("result");
+                        if (result != null) reason = result.optString("error", reason);
+                    }
+                } catch (IOException | JSONException ignored) {
+                    // A proxy may return a non-JSON error page.
+                }
+                throw new ApiException(status, reason + " (HTTP " + status + ")");
+            }
             String setCookie = connection.getHeaderField("Set-Cookie");
             if (setCookie == null || !setCookie.startsWith("auth_token=")) {
                 throw new IOException("PiKVM did not return a login session.");
@@ -215,55 +241,13 @@ final class PikvmClient {
         }
     }
 
-    /** Try the native NanoKVM video service only for a bridge using the same pinned certificate. */
-    boolean prepareNativeVideo(String user, String password) {
-        if (!pinned) return false;
-        try {
-            if (!request("/api/info?fields=bridge", "GET", null, null).has("bridge")) return false;
-            URI address = new URI(baseUrl);
-            String target = new URI("https", null, address.getHost(), 443, null, null, null).toString();
-            if (target.equals(baseUrl)) return false;
-            byte[] body = new JSONObject().put("username", user)
-                    .put("password", encodeNativePassword(password)).toString()
-                    .getBytes(StandardCharsets.UTF_8);
-            HttpsURLConnection connection = (HttpsURLConnection) new URL(target + "/api/auth/login")
-                    .openConnection();
-            connection.setSSLSocketFactory(pinnedFactory);
-            connection.setHostnameVerifier((host, session) -> true);
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(8000);
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/json");
-            connection.setFixedLengthStreamingMode(body.length);
-            try {
-                try (OutputStream output = connection.getOutputStream()) { output.write(body); }
-                if (connection.getResponseCode() != 200) return false;
-                JSONObject response = new JSONObject(new String(
-                        readLimited(connection.getInputStream(), 65536), StandardCharsets.UTF_8));
-                String setCookie = connection.getHeaderField("Set-Cookie");
-                if (response.optInt("code", -1) != 0 || setCookie == null) return false;
-                nativeBaseUrl = target;
-                nativeCookie = setCookie.split(";", 2)[0];
-                return true;
-            } finally {
-                connection.disconnect();
-            }
-        } catch (Exception unavailable) {
-            return false;
-        }
-    }
-
-    boolean hasNativeVideo() { return nativeCookie != null; }
+    boolean hasNativeVideo() { return false; }
 
     WebSocket openNativeVideo(WebSocketListener listener) {
-        ensureEvents();
-        return socketClient.newWebSocket(new Request.Builder()
-                .url(nativeBaseUrl + "/api/stream/h264/direct?flow=2")
-                .header("Cookie", nativeCookie).build(), listener);
+        throw new UnsupportedOperationException("PiKVM does not provide NanoKVM Direct video.");
     }
 
-    private static String encodeNativePassword(String password) throws Exception {
+    static String encodeNativePassword(String password) throws Exception {
         byte[] salt = new byte[8];
         new SecureRandom().nextBytes(salt);
         byte[] secret = "nanokvm-sipeed-2024".getBytes(StandardCharsets.UTF_8);
@@ -293,45 +277,29 @@ final class PikvmClient {
         return new PowerState(state.optBoolean("enabled"), state.getJSONObject("leds").optBoolean("power"));
     }
 
+    JSONObject videoSettings() throws IOException, JSONException {
+        return request("/api/streamer", "GET", null, null);
+    }
+
+    void setVideoParameter(String name, String value) throws IOException, JSONException {
+        if (!"desired_fps".equals(name) && !"quality".equals(name)
+                && !"resolution".equals(name)) {
+            throw new IllegalArgumentException("Unsupported video parameter");
+        }
+        request("/api/streamer/set_params?" + name + "=" + encode(value),
+                "POST", new byte[0], "text/plain");
+    }
+
+    void resetHid() throws IOException, JSONException {
+        request("/api/hid/reset", "POST", new byte[0], "text/plain");
+    }
+
     void setPower(boolean on) throws IOException, JSONException {
         request("/api/atx/power?action=" + (on ? "on" : "off"), "POST", new byte[0], "text/plain");
     }
 
-    /** Ask the KVM to send WOL from its LAN. NanoKVM uses its native API; PiKVM uses GPIO. */
+    /** Ask PiKVM to send WOL through its configured GPIO output. */
     String wakeFromKvm(String mac, String gpioChannel) throws IOException, JSONException {
-        if (nativeCookie != null) {
-            byte[] body = new JSONObject().put("mac", mac).toString().getBytes(StandardCharsets.UTF_8);
-            HttpsURLConnection connection = (HttpsURLConnection) new URL(
-                    nativeBaseUrl + "/api/network/wol").openConnection();
-            connection.setSSLSocketFactory(pinnedFactory);
-            connection.setHostnameVerifier((host, session) -> true);
-            connection.setConnectTimeout(7000);
-            connection.setReadTimeout(12000);
-            connection.setRequestMethod("POST");
-            connection.setRequestProperty("Cookie", nativeCookie);
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("Content-Type", "application/json");
-            connection.setDoOutput(true);
-            connection.setFixedLengthStreamingMode(body.length);
-            try {
-                try (OutputStream output = connection.getOutputStream()) { output.write(body); }
-                int status = connection.getResponseCode();
-                InputStream stream = status < 400 ? connection.getInputStream() : connection.getErrorStream();
-                JSONObject response = new JSONObject(stream == null ? "{}" : new String(
-                        readLimited(stream, 65536), StandardCharsets.UTF_8));
-                if (status != 200 || response.optInt("code", -1) != 0) {
-                    throw new IOException("NanoKVM WOL failed: "
-                            + response.optString("msg", "HTTP " + status));
-                }
-                return "NanoKVM sent the wake packet on its LAN.";
-            } finally {
-                connection.disconnect();
-            }
-        }
-
-        if (request("/api/info", "GET", null, null).has("bridge")) {
-            throw new IOException("NanoKVM WOL is unavailable. Reconnect and check its native service.");
-        }
         JSONObject outputs = request("/api/gpio", "GET", null, null)
                 .getJSONObject("model").getJSONObject("scheme").getJSONObject("outputs");
         String selected = gpioChannel.trim();
@@ -505,7 +473,7 @@ final class PikvmClient {
         return socket.send(new JSONObject().put("event_type", kind).put("event", event).toString());
     }
 
-    HttpsURLConnection openVideo() throws IOException {
+    HttpURLConnection openVideo() throws IOException {
         HttpsURLConnection connection = connect("/streamer/stream", "GET", null, null);
         connection.setRequestProperty("Accept", "multipart/x-mixed-replace");
         int status = connection.getResponseCode();
@@ -567,7 +535,6 @@ final class PikvmClient {
 
     void logout() {
         stopEvents();
-        nativeCookie = null;
         try {
             request("/api/auth/logout", "POST", new byte[0], "text/plain");
         } catch (Exception ignored) {

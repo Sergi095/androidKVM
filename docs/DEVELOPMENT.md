@@ -25,9 +25,14 @@ Keep the release keystore safe: Android updates require the same signing key. Th
 
 ## Connection details
 
-- The app requires HTTPS and uses the KVM web login. Saved passwords are encrypted with a key in Android Keystore. Android backup is disabled. An unrecognized certificate must be explicitly trusted; the app then pins that certificate for the saved KVM. A changed certificate prompts again.
+- PiKVM requires HTTPS. NanoKVM supports HTTPS and explicit `http://` addresses because its stock firmware uses HTTP; HTTP sends credentials without transport encryption. Saved passwords are encrypted with a key in Android Keystore. Android backup is disabled. An unrecognized HTTPS certificate must be explicitly trusted; the app then pins that certificate for the saved KVM. A changed certificate prompts again.
 - For PiKVM with two-factor authentication, append the current one-time code to the password during login, as described in the [PiKVM API](https://docs.pikvm.org/api/).
-- General PiKVM video uses MJPEG. If the [NanoKVM PiKVM bridge](https://github.com/Sergi095/nanokvm-pikvm-bridge) is on the same host as NanoKVM and shares its pinned certificate, the app can use NanoKVM's H.264 Direct stream. Audio and virtual media are not implemented.
+- PiKVM video uses MJPEG. NanoKVM connects directly to its web API and uses H.264 Direct with MJPEG fallback. Audio and virtual media are not implemented.
+- NanoKVM video settings use `POST /api/vm/screen`. Its API does not report current values, so the app shows the last values set on this phone. Capture resolution is controlled by the device and host; display scale changes only the phone view.
+- NanoKVM shell and serial terminals use its authenticated `/api/vm/terminal` WebSocket. The serial view starts `picocom` inside that shell with the selected port and line settings. The terminal renderer bundles xterm.js and addon-fit under their MIT licenses in `app/src/main/assets/terminal`.
+- NanoKVM device settings use its authenticated API. Password changes encrypt both password fields as the NanoKVM web client does, update an existing saved profile, then open a new session because the server revokes the old one.
+- The optional full NanoKVM web interface receives the current session cookie inside a same-origin WebView. On HTTPS, certificate errors are accepted only when the presented certificate matches the fingerprint already trusted for that KVM.
+- Reset HID uses each device's `/api/hid/reset` endpoint.
 - ATX buttons follow the KVM's reported power LED state. If the screen is live but the power LED is reported off, check the KVM's ATX sensing.
 - Wake-on-LAN is sent by the KVM, not the phone. NanoKVM uses its native WOL API. PiKVM uses a configured [WOL GPIO output](https://docs.pikvm.org/wol/); enter the output channel in the app if several exist. WOL requires support in the computer's firmware and network adapter, and sending a packet does not confirm the computer woke.
 - The app PIN is stored as a salted PBKDF2 hash. Biometric checks use Android's system prompt. If a PIN-only lock is forgotten, clearing app data removes both the lock and saved KVMs.
@@ -38,4 +43,8 @@ Keep the release keystore safe: Android updates require the same signing key. Th
 - [PiKVM input WebSocket API](https://github.com/pikvm/kvmd/blob/master/kvmd/apps/kvmd/api/hid.py)
 - [PiKVM video modes](https://docs.pikvm.org/video/)
 - [NanoKVM Direct H.264 stream](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/desktop/screen/direct.worker.ts)
-- [NanoKVM PiKVM bridge](https://github.com/Sergi095/nanokvm-pikvm-bridge)
+- [NanoKVM HID WebSocket](https://github.com/sipeed/NanoKVM/blob/main/server/service/ws/client.go)
+- [NanoKVM video settings API](https://github.com/sipeed/NanoKVM/blob/main/server/service/vm/screen.go)
+- [NanoKVM terminal client](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/terminal/index.tsx)
+- [NanoKVM device settings routes](https://github.com/sipeed/NanoKVM/blob/main/server/router/vm.go)
+- [NanoKVM account routes](https://github.com/sipeed/NanoKVM/blob/main/server/router/auth.go)

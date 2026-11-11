@@ -8,8 +8,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 
-import javax.net.ssl.HttpsURLConnection;
 
 /** Reads a PiKVM-style Content-Length-framed MJPEG stream on its own thread. */
 final class MjpegReader {
@@ -21,7 +21,7 @@ final class MjpegReader {
     private final PikvmClient client;
     private final Listener listener;
     private volatile boolean running;
-    private volatile HttpsURLConnection connection;
+    private volatile HttpURLConnection connection;
     private Thread thread;
 
     MjpegReader(PikvmClient client, Listener listener) {
@@ -38,7 +38,7 @@ final class MjpegReader {
 
     void stop() {
         running = false;
-        HttpsURLConnection active = connection;
+        HttpURLConnection active = connection;
         if (active != null) active.disconnect();
         if (thread != null) thread.interrupt();
     }
@@ -55,7 +55,7 @@ final class MjpegReader {
             } catch (IOException error) {
                 if (running) listener.onStatus(error.getMessage());
             } finally {
-                HttpsURLConnection active = connection;
+                HttpURLConnection active = connection;
                 connection = null;
                 if (active != null) active.disconnect();
             }

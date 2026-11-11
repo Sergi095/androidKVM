@@ -4,6 +4,8 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.net.http.SslCertificate;
+import android.net.http.SslError;
 import android.net.Uri;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -28,6 +30,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewConfiguration;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -36,6 +39,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -45,9 +49,17 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.view.TextureView;
+import android.webkit.CookieManager;
+import android.webkit.SslErrorHandler;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 
 import androidx.core.content.FileProvider;
 import androidx.core.content.ContextCompat;
@@ -55,7 +67,15 @@ import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
 import androidx.fragment.app.FragmentActivity;
 
+import org.json.JSONObject;
+import org.json.JSONArray;
+
 import java.io.File;
+import java.io.ByteArrayInputStream;
+import java.net.URI;
+import java.security.MessageDigest;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -67,7 +87,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLPeerUnverifiedException;
 
-/** Minimal native Android console for PiKVM-compatible devices. */
+/** Minimal native Android console for PiKVM and NanoKVM devices. */
 public final class MainActivity extends FragmentActivity {
     private static final int BG = Color.rgb(8, 16, 31);
     private static final int CONSOLE_BG = Color.BLACK;
@@ -93,6 +113,8 @@ public final class MainActivity extends FragmentActivity {
     private final List<Button> modifierButtons = new ArrayList<>();
     private final List<AlertDialog> openDialogs = new ArrayList<>();
     private AlertDialog securitySettingsDialog;
+    private AlertDialog videoSettingsDialog;
+    private NanoTerminalPanel terminalPanel;
     private PikvmClient client;
     private MjpegReader videoReader;
     private H264Reader h264Reader;
@@ -104,8 +126,10 @@ public final class MainActivity extends FragmentActivity {
     private LinearLayout kvmHome, updatesHome;
     private LinearLayout extraKeys;
     private EditText addressInput, userInput, passwordInput;
+    private Button deviceTypeInput;
+    private String selectedDeviceType = "";
     private String trustedAddress = "", trustedFingerprint = "";
-    private String activeAddress = "", activeUser = "";
+    private String activeAddress = "", activeUser = "", activeType = "pikvm";
     private CheckBox rememberInput;
     private ProfileStore profileStore;
     private SecurityStore securityStore;
@@ -131,6 +155,8 @@ public final class MainActivity extends FragmentActivity {
     private boolean updateBusy;
     private static final int INSTALL_PERMISSION_REQUEST = 1701;
     private boolean trackpadMode;
+    private boolean fillScreen;
+    private int screenScalePercent = 100;
     private float pointerX = 0.5f, pointerY = 0.5f;
     private int consoleTopInset, consoleBottomInset;
 
@@ -146,6 +172,7 @@ public final class MainActivity extends FragmentActivity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         profileStore = new ProfileStore(this);
+        fillScreen = getSharedPreferences("video_preferences", MODE_PRIVATE).getBoolean("fill_screen", false);
         securityStore = new SecurityStore(this);
         updateManager = new UpdateManager(this);
         getWindow().setStatusBarColor(BG);
@@ -229,6 +256,7 @@ public final class MainActivity extends FragmentActivity {
     @Override public void onStop() {
         foreground = false;
         for (AlertDialog dialog : new ArrayList<>(openDialogs)) dialog.dismiss();
+        closeNanoTerminal(false);
         handler.removeCallbacks(powerPoll);
         stopVideo();
         if (client != null) client.stopEvents();
@@ -238,6 +266,7 @@ public final class MainActivity extends FragmentActivity {
 
     @Override public void onDestroy() {
         handler.removeCallbacks(powerPoll);
+        closeNanoTerminal(false);
         stopVideo();
         io.shutdownNow();
         mouseIo.shutdownNow();
@@ -247,8 +276,70 @@ public final class MainActivity extends FragmentActivity {
         super.onDestroy();
     }
 
+    @Override public void onBackPressed() {
+        if (hideVisibleKeyboard()) return;
+        for (int index = openDialogs.size() - 1; index >= 0; index--) {
+            AlertDialog dialog = openDialogs.get(index);
+            if (dialog.isShowing()) { dialog.dismiss(); return; }
+        }
+        if (terminalPanel != null) { closeNanoTerminal(true); return; }
+        if (locked) { moveTaskToBack(true); return; }
+        if (client != null) { logout(); return; }
+        if (updatesHome.getVisibility() == View.VISIBLE) { showHomeTab(false); return; }
+        if (loginPanel.getVisibility() == View.VISIBLE && !profileStore.list().isEmpty()) {
+            closeAddKvmForm();
+            return;
+        }
+        if (securityStore.enabled()) displayLockPage();
+        moveTaskToBack(true);
+    }
+
+    private boolean hideVisibleKeyboard() {
+        View focused = getCurrentFocus();
+        if (focused == null) return false;
+        WindowInsets insets = getWindow().getDecorView().getRootWindowInsets();
+        boolean visible = Build.VERSION.SDK_INT >= 30 && insets != null
+                && insets.isVisible(WindowInsets.Type.ime());
+        if (!visible) {
+            Rect frame = new Rect();
+            getWindow().getDecorView().getWindowVisibleDisplayFrame(frame);
+            Point display = new Point();
+            getWindowManager().getDefaultDisplay().getRealSize(display);
+            visible = display.y - frame.bottom > dp(160);
+        }
+        if (!visible) return false;
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+        focused.clearFocus();
+        return true;
+    }
+
     private void showOverflow(View anchor) {
         PopupMenu menu = new PopupMenu(this, anchor);
+        if (client != null) {
+            menu.getMenu().add("Video settings").setOnMenuItemClickListener(item -> {
+                showVideoSettings();
+                return true;
+            });
+            menu.getMenu().add("Reset HID").setOnMenuItemClickListener(item -> {
+                confirmHidReset();
+                return true;
+            });
+            if (client instanceof NanoKvmClient) {
+                menu.getMenu().add("NanoKVM settings").setOnMenuItemClickListener(item -> {
+                    showNanoSettings();
+                    return true;
+                });
+                menu.getMenu().add("NanoKVM terminal").setOnMenuItemClickListener(item -> {
+                    openNanoTerminal(null);
+                    return true;
+                });
+                menu.getMenu().add("Serial terminal").setOnMenuItemClickListener(item -> {
+                    showSerialTerminalSetup();
+                    return true;
+                });
+            }
+        }
         menu.getMenu().add("Security settings").setOnMenuItemClickListener(item -> {
             showSecuritySettings();
             return true;
@@ -261,6 +352,928 @@ public final class MainActivity extends FragmentActivity {
             });
         }
         menu.show();
+    }
+
+    private void confirmHidReset() {
+        PikvmClient active = client;
+        if (active == null) return;
+        showTrackedDialog(new AlertDialog.Builder(this)
+                .setTitle("Reset KVM input?")
+                .setMessage("Keyboard and mouse may disconnect briefly.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Reset HID", (dialog, which) -> io.execute(() -> {
+                    try {
+                        active.resetHid();
+                        active.stopEvents();
+                        active.ensureEvents();
+                        runOnUiThread(() -> {
+                            if (client == active) Toast.makeText(this, "HID reset", Toast.LENGTH_SHORT).show();
+                        });
+                    } catch (Exception error) {
+                        runOnUiThread(() -> {
+                            if (client == active) showMessage(error.getMessage());
+                        });
+                    }
+                })).create());
+    }
+
+    private void openNanoTerminal(String serialCommand) {
+        if (!(client instanceof NanoKvmClient) || locked) return;
+        if (terminalPanel != null) closeNanoTerminal(false);
+        NanoKvmClient active = (NanoKvmClient) client;
+        handler.removeCallbacks(powerPoll);
+        stopVideo();
+        active.stopEvents();
+        terminalPanel = new NanoTerminalPanel(this, active, serialCommand, this::consumeModifiers);
+        videoArea.addView(terminalPanel, new FrameLayout.LayoutParams(-1, -1));
+        screen.setVisibility(View.GONE);
+        fastVideo.setVisibility(View.GONE);
+        videoStatus.setVisibility(View.GONE);
+        consoleTitle.setText(serialCommand == null ? "NanoKVM terminal" : "Serial terminal");
+    }
+
+    private void closeNanoTerminal(boolean resumeVideo) {
+        if (terminalPanel == null) return;
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        View focused = getCurrentFocus();
+        if (keyboard != null && focused != null)
+            keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+        videoArea.removeView(terminalPanel);
+        terminalPanel.close();
+        terminalPanel = null;
+        modifiers.clear();
+        updateModifierButtons();
+        screen.setVisibility(View.VISIBLE);
+        videoStatus.setVisibility(View.VISIBLE);
+        consoleTitle.setText(activeAddress);
+        if (resumeVideo && !locked && client != null && foreground) {
+            startVideo(client);
+            handler.removeCallbacks(powerPoll);
+            handler.post(powerPoll);
+        }
+    }
+
+    private void showNanoSettings() {
+        if (!(client instanceof NanoKvmClient) || locked) return;
+        NanoKvmClient active = (NanoKvmClient) client;
+        LinearLayout items = column();
+        items.setPadding(dp(18), 0, dp(18), dp(12));
+        items.addView(text("ACCOUNT", 12, ACCENT), spaced());
+        nanoSettingButton(items, "Change NanoKVM password", () -> showNanoPassword(active));
+        items.addView(text("DEVICE", 12, ACCENT), spaced());
+        nanoSettingButton(items, "Device information", () -> showNanoInfo(active));
+        nanoSettingButton(items, "Hostname", () -> nanoTextSetting(active, "Hostname",
+                "/api/vm/hostname", "hostname", "[A-Za-z0-9][A-Za-z0-9-]{0,62}",
+                "Use letters, numbers, and hyphens."));
+        nanoSettingButton(items, "Web page title", () -> nanoTextSetting(active, "Web page title",
+                "/api/vm/web-title", "title", ".{1,60}", "Enter 1–60 characters."));
+        nanoSettingButton(items, "SSH", () -> nanoToggle(active, "SSH", "/api/vm/ssh", "enabled",
+                "/api/vm/ssh/enable", "/api/vm/ssh/disable"));
+        nanoSettingButton(items, "mDNS", () -> nanoToggle(active, "mDNS", "/api/vm/mdns", "enabled",
+                "/api/vm/mdns/enable", "/api/vm/mdns/disable"));
+        nanoSettingButton(items, "HDMI capture", () -> nanoToggle(active, "HDMI capture", "/api/vm/hdmi",
+                "enabled", "/api/vm/hdmi/enable", "/api/vm/hdmi/disable"));
+        nanoSettingButton(items, "HDMI idle timeout", () -> nanoNumberSetting(active,
+                "HDMI idle timeout (minutes)", "/api/vm/hdmi", "idleTimeout",
+                "/api/vm/hdmi/timeout", "minutes", 0, 10080));
+        nanoSettingButton(items, "Reset HDMI capture", () -> confirmNanoAction(active,
+                "Reset HDMI capture?", "/api/vm/hdmi/reset"));
+        nanoSettingButton(items, "OLED sleep", () -> showNanoOled(active));
+        nanoSettingButton(items, "Mouse jiggler", () -> showNanoMouseJiggler(active));
+        nanoSettingButton(items, "Virtual USB devices", () -> showNanoVirtualDevices(active));
+        nanoSettingButton(items, "Swap file", () -> showNanoSwap(active));
+        nanoSettingButton(items, "Memory limit", () -> showNanoMemoryLimit(active));
+        items.addView(text("NETWORK", 12, ACCENT), spaced());
+        nanoSettingButton(items, "Wi-Fi", () -> showNanoWifi(active));
+        nanoSettingButton(items, "DNS", () -> showNanoDns(active));
+        nanoSettingButton(items, "HTTPS", () -> showNanoHttps(active));
+        items.addView(text("SYSTEM", 12, ACCENT), spaced());
+        nanoSettingButton(items, "Reboot NanoKVM", () -> confirmNanoAction(active,
+                "Reboot NanoKVM?", "/api/vm/system/reboot"));
+        nanoSettingButton(items, "Full NanoKVM web interface", () -> showNanoWebInterface(active));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(items);
+        showTrackedDialog(new AlertDialog.Builder(this).setTitle("NanoKVM settings")
+                .setView(scroll).setPositiveButton("Done", null).create());
+    }
+
+    private void nanoSettingButton(LinearLayout items, String label, Runnable action) {
+        Button button = button(label + "  ›", SURFACE, TEXT);
+        button.setOnClickListener(view -> action.run());
+        items.addView(button, spaced());
+    }
+
+    private void loadNanoSetting(NanoKvmClient active, String path,
+                                 java.util.function.Consumer<JSONObject> loaded) {
+        io.execute(() -> {
+            try {
+                JSONObject result = active.setting(path);
+                runOnUiThread(() -> {
+                    if (client == active && !locked) loaded.accept(result);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client == active) showMessage(error.getMessage());
+                });
+            }
+        });
+    }
+
+    private JSONObject nanoValue(String key, Object value) {
+        JSONObject data = new JSONObject();
+        try { data.put(key, value); }
+        catch (Exception ignored) { }
+        return data;
+    }
+
+    private void applyNanoSetting(NanoKvmClient active, String path, JSONObject data, Runnable after) {
+        io.execute(() -> {
+            try {
+                active.updateSetting(path, data);
+                runOnUiThread(() -> {
+                    if (client != active || locked) return;
+                    Toast.makeText(this, "NanoKVM setting saved", Toast.LENGTH_SHORT).show();
+                    if (after != null) after.run();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client == active) showMessage(error.getMessage());
+                });
+            }
+        });
+    }
+
+    private void showNanoPassword(NanoKvmClient active) {
+        LinearLayout form = column();
+        form.setPadding(dp(20), 0, dp(20), dp(8));
+        EditText current = field("Current password", true);
+        EditText next = field("New password", true);
+        EditText confirm = field("Repeat new password", true);
+        form.addView(current);
+        form.addView(next, spaced());
+        form.addView(confirm, spaced());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Change NanoKVM password")
+                .setView(form).setNegativeButton("Cancel", null)
+                .setPositiveButton("Change", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String oldPassword = current.getText().toString();
+                    String newPassword = next.getText().toString();
+                    if (oldPassword.isEmpty()) { current.setError("Enter the current password."); return; }
+                    if (newPassword.length() < 8) { next.setError("Use at least 8 characters."); return; }
+                    if (!newPassword.equals(confirm.getText().toString())) {
+                        confirm.setError("Passwords do not match."); return;
+                    }
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                    io.execute(() -> {
+                        try {
+                            active.changePassword(oldPassword, newPassword);
+                            String savedPin = null;
+                            for (ProfileStore.Profile saved : profileStore.list()) {
+                                if (saved.type.equals("nanokvm") && saved.address.equals(activeAddress)
+                                        && saved.user.equals(activeUser)) { savedPin = saved.pin; break; }
+                            }
+                            boolean savedLoginUpdated = true;
+                            if (savedPin != null) {
+                                try { profileStore.save("nanokvm", activeAddress, activeUser,
+                                        savedPin, newPassword); }
+                                catch (Exception saveError) { savedLoginUpdated = false; }
+                            }
+                            active.stopEvents();
+                            boolean reconnected = true;
+                            try { active.login(activeUser, newPassword); }
+                            catch (Exception loginError) { reconnected = false; }
+                            boolean finalSaved = savedLoginUpdated;
+                            boolean finalReconnected = reconnected;
+                            runOnUiThread(() -> {
+                                if (client != active) return;
+                                dialog.dismiss();
+                                renderSavedProfiles();
+                                if (finalReconnected) {
+                                    if (terminalPanel != null) closeNanoTerminal(true);
+                                    else startVideo(active);
+                                } else logout();
+                                String result = "NanoKVM password changed"
+                                        + (finalReconnected ? "" : ". Reconnect with the new password")
+                                        + (finalSaved ? "" : ". Saved login was not updated");
+                                Toast.makeText(this, result, Toast.LENGTH_LONG).show();
+                            });
+                        } catch (Exception error) {
+                            runOnUiThread(() -> {
+                                if (client != active) return;
+                                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                                showMessage("Password change: " + error.getMessage());
+                            });
+                        }
+                    });
+                }));
+        showTrackedDialog(dialog);
+    }
+
+    private void nanoTextSetting(NanoKvmClient active, String title, String path,
+                                 String key, String pattern, String validation) {
+        loadNanoSetting(active, path, state -> {
+            EditText input = field(title, false);
+            input.setText(state.optString(key, ""));
+            LinearLayout form = column();
+            form.setPadding(dp(20), 0, dp(20), dp(8));
+            form.addView(input);
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(form)
+                    .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+            dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setOnClickListener(view -> {
+                        String value = input.getText().toString().trim();
+                        if (!value.matches(pattern) || ("hostname".equals(key) && value.endsWith("-"))) {
+                            input.setError(validation); return;
+                        }
+                        applyNanoSetting(active, path, nanoValue(key, value), dialog::dismiss);
+                    }));
+            showTrackedDialog(dialog);
+        });
+    }
+
+    private void nanoToggle(NanoKvmClient active, String title, String readPath,
+                            String key, String onPath, String offPath) {
+        loadNanoSetting(active, readPath, state -> {
+            boolean enabled = state.optBoolean(key);
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle(title)
+                    .setSingleChoiceItems(new String[]{"Off", "On"}, enabled ? 1 : 0,
+                            (dialog, choice) -> {
+                                if ((choice == 1) != enabled)
+                                    applyNanoSetting(active, choice == 1 ? onPath : offPath,
+                                            new JSONObject(), dialog::dismiss);
+                                else dialog.dismiss();
+                            }).setNegativeButton("Cancel", null).create());
+        });
+    }
+
+    private void nanoNumberSetting(NanoKvmClient active, String title, String readPath,
+                                   String readKey, String writePath, String writeKey, int min, int max) {
+        loadNanoSetting(active, readPath, state -> {
+            EditText input = field(title, false);
+            input.setInputType(InputType.TYPE_CLASS_NUMBER);
+            input.setText(Integer.toString(state.optInt(readKey, min)));
+            LinearLayout form = column();
+            form.setPadding(dp(20), 0, dp(20), dp(8));
+            form.addView(input);
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(form)
+                    .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+            dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setOnClickListener(view -> {
+                        int value;
+                        try { value = Integer.parseInt(input.getText().toString()); }
+                        catch (NumberFormatException error) { input.setError("Enter a number."); return; }
+                        if (value < min || value > max) {
+                            input.setError("Choose " + min + "–" + max + "."); return;
+                        }
+                        applyNanoSetting(active, writePath, nanoValue(writeKey, value), dialog::dismiss);
+                    }));
+            showTrackedDialog(dialog);
+        });
+    }
+
+    private void confirmNanoAction(NanoKvmClient active, String title, String path) {
+        showTrackedDialog(new AlertDialog.Builder(this).setTitle(title)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Continue", (dialog, which) ->
+                        applyNanoSetting(active, path, new JSONObject(), null)).create());
+    }
+
+    private void showNanoInfo(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/vm/info", info -> {
+            StringBuilder details = new StringBuilder();
+            details.append("Application: ").append(info.optString("application", "Unknown"))
+                    .append("\nSystem image: ").append(info.optString("image", "Unknown"));
+            String mdns = info.optString("mdns", "");
+            if (!mdns.isEmpty()) details.append("\nmDNS: ").append(mdns);
+            JSONArray ips = info.optJSONArray("ips");
+            if (ips != null) for (int index = 0; index < ips.length(); index++) {
+                JSONObject item = ips.optJSONObject(index);
+                if (item != null) details.append("\n")
+                        .append(item.optString("name", "Interface"))
+                        .append(": ").append(item.optString("addr", ""));
+            }
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("NanoKVM information")
+                    .setMessage(details.toString()).setPositiveButton("Done", null).create());
+        });
+    }
+
+    private void showNanoOled(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/vm/oled", state -> {
+            if (!state.optBoolean("exist")) {
+                showMessage("This NanoKVM has no OLED screen."); return;
+            }
+            int[] seconds = {0, 15, 30, 60, 180, 300, 600, 1800, 3600};
+            String[] choices = new String[seconds.length];
+            int selected = -1;
+            for (int index = 0; index < seconds.length; index++) {
+                choices[index] = seconds[index] == 0 ? "Never sleep" : seconds[index] + " seconds";
+                if (seconds[index] == state.optInt("sleep")) selected = index;
+            }
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("OLED sleep")
+                    .setSingleChoiceItems(choices, selected, (dialog, index) ->
+                            applyNanoSetting(active, "/api/vm/oled",
+                                    nanoValue("sleep", seconds[index]), dialog::dismiss))
+                    .setNegativeButton("Cancel", null).create());
+        });
+    }
+
+    private void showNanoMouseJiggler(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/vm/mouse-jiggler", state -> {
+            int selected = !state.optBoolean("enabled") ? 0
+                    : "absolute".equals(state.optString("mode")) ? 2 : 1;
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("Mouse jiggler")
+                    .setSingleChoiceItems(new String[]{"Off", "Relative", "Absolute"}, selected,
+                            (dialog, index) -> {
+                                JSONObject data = nanoValue("enabled", index != 0);
+                                try { data.put("mode", index == 2 ? "absolute" : "relative"); }
+                                catch (Exception ignored) { }
+                                applyNanoSetting(active, "/api/vm/mouse-jiggler/", data, dialog::dismiss);
+                            }).setNegativeButton("Cancel", null).create());
+        });
+    }
+
+    private void showNanoVirtualDevices(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/vm/device/virtual", state -> {
+            String[] devices = {"network", "media", "disk"};
+            String[] labels = {"USB network", "Virtual media", "USB disk"};
+            String[] options = new String[devices.length];
+            for (int index = 0; index < devices.length; index++)
+                options[index] = labels[index] + " · " + (state.optBoolean(devices[index]) ? "On" : "Off");
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("Virtual USB devices")
+                    .setItems(options, (dialog, index) -> {
+                        boolean enable = !state.optBoolean(devices[index]);
+                        showTrackedDialog(new AlertDialog.Builder(this)
+                                .setTitle((enable ? "Enable " : "Disable ") + labels[index] + "?")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Continue", (confirm, choice) -> {
+                                    JSONObject data = nanoValue("device", devices[index]);
+                                    try { data.put("enable", enable); }
+                                    catch (Exception ignored) { }
+                                    applyNanoSetting(active, "/api/vm/device/virtual", data,
+                                            () -> showNanoVirtualDevices(active));
+                                }).create());
+                    }).setNegativeButton("Done", null).create());
+        });
+    }
+
+    private void showNanoSwap(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/vm/swap", state -> {
+            int[] sizes = {0, 64, 128, 256, 512};
+            String[] labels = {"Off", "64 MB", "128 MB", "256 MB", "512 MB"};
+            int selected = -1;
+            for (int index = 0; index < sizes.length; index++)
+                if (state.optInt("size") == sizes[index]) selected = index;
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("Swap file")
+                    .setSingleChoiceItems(labels, selected, (dialog, index) ->
+                            applyNanoSetting(active, "/api/vm/swap", nanoValue("size", sizes[index]),
+                                    dialog::dismiss))
+                    .setNegativeButton("Cancel", null).create());
+        });
+    }
+
+    private void showNanoMemoryLimit(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/vm/memory/limit", state -> {
+            boolean enabled = state.optBoolean("enabled");
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("Memory limit")
+                    .setMessage("Limit NanoKVM application memory use to 75 MB.")
+                    .setSingleChoiceItems(new String[]{"Off", "On"}, enabled ? 1 : 0,
+                            (dialog, index) -> {
+                                JSONObject data = nanoValue("enabled", index == 1);
+                                try { data.put("limit", index == 1 ? 75 : 0); }
+                                catch (Exception ignored) { }
+                                applyNanoSetting(active, "/api/vm/memory/limit", data,
+                                        dialog::dismiss);
+                            }).setNegativeButton("Cancel", null).create());
+        });
+    }
+
+    private void showNanoWifi(NanoKvmClient active) {
+        LinearLayout form = column();
+        form.setPadding(dp(20), 0, dp(20), dp(8));
+        TextView status = text("Checking NanoKVM Wi-Fi…", 13, MUTED);
+        form.addView(status);
+        EditText ssid = field("Wi-Fi name", false);
+        EditText password = field("Wi-Fi password", true);
+        form.addView(ssid, spaced());
+        form.addView(password, spaced());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("NanoKVM Wi-Fi")
+                .setView(form).setNeutralButton("Disconnect", null)
+                .setNegativeButton("Close", null).setPositiveButton("Connect", null).create();
+        dialog.setOnShowListener(ignored -> {
+            Button connect = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            Button disconnect = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            connect.setEnabled(false);
+            disconnect.setVisibility(View.GONE);
+            connect.setOnClickListener(view -> {
+                String name = ssid.getText().toString().trim();
+                String secret = password.getText().toString();
+                if (name.isEmpty()) { ssid.setError("Enter the Wi-Fi name."); return; }
+                if (secret.isEmpty()) { password.setError("Enter the Wi-Fi password."); return; }
+                JSONObject data = nanoValue("ssid", name);
+                try { data.put("password", secret); }
+                catch (Exception ignored2) { }
+                submitNanoWifi(active, "/api/network/wifi/connect", data, dialog,
+                        status, ssid, password, connect, disconnect, "Connecting to " + name + "…");
+            });
+            disconnect.setOnClickListener(view -> submitNanoWifi(active,
+                    "/api/network/wifi/disconnect", new JSONObject(), dialog,
+                    status, ssid, password, connect, disconnect, "Disconnecting Wi-Fi…"));
+            loadNanoWifi(active, dialog, status, ssid, password, connect, disconnect);
+        });
+        showTrackedDialog(dialog);
+    }
+
+    private void loadNanoWifi(NanoKvmClient active, AlertDialog dialog, TextView status,
+                              EditText ssid, EditText password, Button connect, Button disconnect) {
+        io.execute(() -> {
+            try {
+                JSONObject state = active.setting("/api/network/wifi");
+                runOnUiThread(() -> {
+                    if (client != active || locked || !dialog.isShowing()) return;
+                    boolean supported = state.optBoolean("supported");
+                    boolean apMode = state.optBoolean("apMode");
+                    boolean connected = state.optBoolean("connected");
+                    if (!supported) status.setText("Wi-Fi is unavailable on this NanoKVM.");
+                    else if (apMode) status.setText("NanoKVM is in Wi-Fi setup mode. Use its setup page to join a network.");
+                    else status.setText(connected ? "Connected to " + state.optString("ssid", "Wi-Fi")
+                            : "Not connected");
+                    ssid.setVisibility(supported && !apMode ? View.VISIBLE : View.GONE);
+                    password.setVisibility(supported && !apMode ? View.VISIBLE : View.GONE);
+                    connect.setVisibility(supported && !apMode ? View.VISIBLE : View.GONE);
+                    connect.setEnabled(supported && !apMode);
+                    disconnect.setVisibility(supported && !apMode && connected ? View.VISIBLE : View.GONE);
+                    disconnect.setEnabled(true);
+                    if (connected) ssid.setText(state.optString("ssid", ""));
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client != active || !dialog.isShowing()) return;
+                    status.setText("Could not read NanoKVM Wi-Fi: " + error.getMessage());
+                    connect.setEnabled(false);
+                    disconnect.setVisibility(View.GONE);
+                });
+            }
+        });
+    }
+
+    private void submitNanoWifi(NanoKvmClient active, String path, JSONObject data,
+                                AlertDialog dialog, TextView status, EditText ssid,
+                                EditText password, Button connect, Button disconnect, String progress) {
+        connect.setEnabled(false);
+        disconnect.setEnabled(false);
+        status.setText(progress + " This may take a while.");
+        io.execute(() -> {
+            try {
+                active.updateSetting(path, data);
+                runOnUiThread(() -> {
+                    if (client != active || locked || !dialog.isShowing()) return;
+                    password.setText("");
+                    status.setText("Wi-Fi updated. Checking the connection…");
+                    loadNanoWifi(active, dialog, status, ssid, password, connect, disconnect);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client != active || !dialog.isShowing()) return;
+                    status.setText("Wi-Fi change failed: " + error.getMessage());
+                    connect.setEnabled(true);
+                    disconnect.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private void showNanoDns(NanoKvmClient active) {
+        loadNanoSetting(active, "/api/network/dns", state -> {
+            LinearLayout form = column();
+            form.setPadding(dp(20), 0, dp(20), dp(8));
+            form.addView(text("Use DHCP for automatic DNS, or enter up to six IP addresses, one per line.",
+                    13, MUTED));
+            CheckBox dhcp = new CheckBox(this);
+            dhcp.setText("Automatic (DHCP)");
+            dhcp.setTextColor(TEXT);
+            dhcp.setChecked(!"manual".equals(state.optString("mode")));
+            form.addView(dhcp, spaced());
+            EditText servers = field("DNS servers", false);
+            servers.setSingleLine(false);
+            servers.setMinLines(3);
+            JSONArray current = state.optJSONArray("servers");
+            StringBuilder values = new StringBuilder();
+            if (current != null) for (int index = 0; index < current.length(); index++) {
+                if (values.length() > 0) values.append('\n');
+                values.append(current.optString(index));
+            }
+            servers.setText(values.toString());
+            servers.setEnabled(!dhcp.isChecked());
+            dhcp.setOnCheckedChangeListener((button, checked) -> servers.setEnabled(!checked));
+            form.addView(servers, spaced());
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle("NanoKVM DNS")
+                    .setView(form).setNegativeButton("Cancel", null)
+                    .setPositiveButton("Save", null).create();
+            dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setOnClickListener(view -> {
+                        JSONArray addresses = new JSONArray();
+                        if (!dhcp.isChecked()) {
+                            String[] lines = servers.getText().toString().trim().split("[\\s,;]+");
+                            for (String line : lines) if (!line.isEmpty()) {
+                                if (!line.matches("[0-9A-Fa-f:.]+")) {
+                                    servers.setError("Enter IP addresses only."); return;
+                                }
+                                addresses.put(line);
+                            }
+                            if (addresses.length() < 1 || addresses.length() > 6) {
+                                servers.setError("Enter 1–6 DNS servers."); return;
+                            }
+                        }
+                        JSONObject data = nanoValue("mode", dhcp.isChecked() ? "dhcp" : "manual");
+                        try { data.put("servers", addresses); }
+                        catch (Exception ignored2) { }
+                        applyNanoSetting(active, "/api/network/dns", data, dialog::dismiss);
+                    }));
+            showTrackedDialog(dialog);
+        });
+    }
+
+    private void showNanoHttps(NanoKvmClient active) {
+        boolean https = active.baseUrl.startsWith("https://");
+        showTrackedDialog(new AlertDialog.Builder(this)
+                .setTitle(https ? "Disable NanoKVM HTTPS?" : "Enable NanoKVM HTTPS?")
+                .setMessage("The NanoKVM web server will restart. Reconnect using "
+                        + (https ? "http://" : "https://") + " at the same host and port."
+                        + (https ? "" : " You may need to trust its new certificate."))
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Change", (dialog, which) ->
+                        applyNanoSetting(active, "/api/vm/tls", nanoValue("enabled", !https),
+                                () -> {
+                                    Toast.makeText(this, "Reconnect with the new URL scheme",
+                                            Toast.LENGTH_LONG).show();
+                                    logout();
+                                })).create());
+    }
+
+    private void showNanoWebInterface(NanoKvmClient active) {
+        if (active.cookie == null) {
+            showMessage("NanoKVM session is unavailable. Reconnect first.");
+            return;
+        }
+        LinearLayout layout = column();
+        layout.setBackgroundColor(BG);
+        layout.setPadding(dp(12), 0, dp(12), 0);
+        layout.addView(text("Use the gear icon for NanoKVM's remaining settings. Change your password in androidKVM above to keep a saved login updated.",
+                12, MUTED), spaced());
+        WebView web = new WebView(this);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        CookieManager cookies = CookieManager.getInstance();
+        cookies.setAcceptCookie(true);
+        cookies.setAcceptThirdPartyCookies(web, false);
+        web.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return !sameNanoOrigin(active, request.getUrl().toString());
+            }
+
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (sameNanoOrigin(active, request.getUrl().toString())) return null;
+                return new WebResourceResponse("text/plain", "UTF-8",
+                        new ByteArrayInputStream(new byte[0]));
+            }
+
+            @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                if (!sameNanoOrigin(active, error.getUrl()) || !matchesNanoCertificate(active, error)) {
+                    handler.cancel();
+                    showMessage("NanoKVM certificate changed. Reconnect and trust the new certificate first.");
+                    return;
+                }
+                handler.proceed();
+            }
+        });
+        layout.addView(web, new LinearLayout.LayoutParams(-1,
+                getResources().getDisplayMetrics().heightPixels - dp(310)));
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("NanoKVM web interface")
+                .setView(layout).setPositiveButton("Done", null).create();
+        showTrackedDialog(dialog, () -> {
+            web.stopLoading();
+            layout.removeView(web);
+            web.destroy();
+        });
+        cookies.setCookie(active.baseUrl, active.cookie + "; Path=/; HttpOnly; SameSite=Lax"
+                + (active.baseUrl.startsWith("https://") ? "; Secure" : ""), loaded -> {
+            if (dialog.isShowing() && client == active) web.loadUrl(active.baseUrl);
+        });
+    }
+
+    private static boolean sameNanoOrigin(NanoKvmClient active, String target) {
+        try {
+            URI source = new URI(active.baseUrl);
+            URI candidate = new URI(target);
+            int sourcePort = source.getPort() < 0 ? ("https".equalsIgnoreCase(source.getScheme()) ? 443 : 80)
+                    : source.getPort();
+            int candidatePort = candidate.getPort() < 0
+                    ? ("https".equalsIgnoreCase(candidate.getScheme()) ? 443 : 80) : candidate.getPort();
+            return source.getScheme().equalsIgnoreCase(candidate.getScheme())
+                    && source.getHost().equalsIgnoreCase(candidate.getHost())
+                    && sourcePort == candidatePort;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private static boolean matchesNanoCertificate(NanoKvmClient active, SslError error) {
+        if (!active.pinned || error.getCertificate() == null) return false;
+        try {
+            X509Certificate certificate = Build.VERSION.SDK_INT >= 29
+                    ? error.getCertificate().getX509Certificate() : null;
+            if (certificate == null) {
+                Bundle saved = SslCertificate.saveState(error.getCertificate());
+                byte[] encoded = saved == null ? null : saved.getByteArray("x509-certificate");
+                if (encoded == null) return false;
+                certificate = (X509Certificate) CertificateFactory.getInstance("X.509")
+                        .generateCertificate(new ByteArrayInputStream(encoded));
+            }
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded());
+            StringBuilder hex = new StringBuilder(64);
+            for (byte value : digest) hex.append(String.format(java.util.Locale.ROOT, "%02X", value & 0xff));
+            return active.certificatePin.equals(hex.toString());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void showSerialTerminalSetup() {
+        if (!(client instanceof NanoKvmClient)) return;
+        String prefix = client.baseUrl + "|";
+        android.content.SharedPreferences saved = getSharedPreferences("serial_preferences", MODE_PRIVATE);
+        LinearLayout form = column();
+        form.setPadding(dp(20), 0, dp(20), dp(12));
+        form.addView(text("The port is on the NanoKVM. Common ports are /dev/ttyS1 and /dev/ttyS2.",
+                13, MUTED));
+        form.addView(text("Port", 13, MUTED), spaced());
+        EditText port = field("/dev/ttyS1", false);
+        port.setText(saved.getString(prefix + "port", "/dev/ttyS1"));
+        form.addView(port);
+        Spinner baud = serialChoice(form, "Baud rate",
+                new String[]{"9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"},
+                saved.getString(prefix + "baud", "115200"));
+        Spinner parity = serialChoice(form, "Parity", new String[]{"none", "even", "odd"},
+                saved.getString(prefix + "parity", "none"));
+        Spinner flow = serialChoice(form, "Flow control", new String[]{"none", "soft", "hard"},
+                saved.getString(prefix + "flow", "none"));
+        Spinner bits = serialChoice(form, "Data bits", new String[]{"5", "6", "7", "8"},
+                saved.getString(prefix + "bits", "8"));
+        Spinner stops = serialChoice(form, "Stop bits", new String[]{"1", "2"},
+                saved.getString(prefix + "stops", "1"));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(form);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Serial terminal")
+                .setView(scroll).setNegativeButton("Cancel", null)
+                .setPositiveButton("Open", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String path = port.getText().toString().trim();
+                    if (!path.matches("/dev/[A-Za-z0-9._-]+") || path.contains("..")) {
+                        port.setError("Enter a port such as /dev/ttyS1.");
+                        return;
+                    }
+                    String baudValue = baud.getSelectedItem().toString();
+                    String parityValue = parity.getSelectedItem().toString();
+                    String flowValue = flow.getSelectedItem().toString();
+                    String bitsValue = bits.getSelectedItem().toString();
+                    String stopsValue = stops.getSelectedItem().toString();
+                    saved.edit().putString(prefix + "port", path).putString(prefix + "baud", baudValue)
+                            .putString(prefix + "parity", parityValue).putString(prefix + "flow", flowValue)
+                            .putString(prefix + "bits", bitsValue).putString(prefix + "stops", stopsValue).apply();
+                    String command = "picocom " + path + " --baud " + baudValue
+                            + " --parity " + parityValue + " --flow " + flowValue
+                            + " --databits " + bitsValue + " --stopbits " + stopsValue;
+                    dialog.dismiss();
+                    openNanoTerminal(command);
+                }));
+        showTrackedDialog(dialog);
+    }
+
+    private Spinner serialChoice(LinearLayout form, String label, String[] values, String selected) {
+        form.addView(text(label, 13, MUTED), spaced());
+        Spinner spinner = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(this,
+                android.R.layout.simple_spinner_item, values) {
+            @Override public View getView(int position, View convertView, ViewGroup parent) {
+                return deviceTypeLabel(getItem(position), false);
+            }
+            @Override public View getDropDownView(int position, View convertView, ViewGroup parent) {
+                return deviceTypeLabel(getItem(position), true);
+            }
+        };
+        spinner.setAdapter(adapter);
+        spinner.setSelection(Math.max(0, adapter.getPosition(selected)));
+        spinner.setBackground(rounded(SURFACE));
+        spinner.setPopupBackgroundDrawable(rounded(PANEL));
+        spinner.post(() -> spinner.setDropDownWidth(spinner.getWidth()));
+        form.addView(spinner);
+        return spinner;
+    }
+
+    private void showVideoSettings() {
+        PikvmClient active = client;
+        if (active == null) return;
+        io.execute(() -> {
+            try {
+                JSONObject state = active.videoSettings();
+                runOnUiThread(() -> {
+                    if (client == active && !locked) renderVideoSettings(active, state);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client == active) showTrackedDialog(new AlertDialog.Builder(this)
+                            .setTitle("Video settings unavailable")
+                            .setMessage(error.getMessage()).setPositiveButton("OK", null).create());
+                });
+            }
+        });
+    }
+
+    private void renderVideoSettings(PikvmClient active, JSONObject state) {
+        boolean nano = active instanceof NanoKvmClient;
+        JSONObject features = state.optJSONObject("features");
+        JSONObject params = state.optJSONObject("params");
+        JSONObject limits = state.optJSONObject("limits");
+        if (params == null) params = new JSONObject();
+        if (limits == null) limits = new JSONObject();
+        LinearLayout content = column();
+        content.setPadding(dp(20), dp(4), dp(20), dp(8));
+        content.addView(text(nano
+                ? "NanoKVM does not report its current video settings. Values shown here are the last ones you set in this app."
+                : "Changes the KVM video stream for all connected viewers. Screen resolution depends on the KVM hardware.",
+                13, MUTED));
+
+        if (nano) {
+            addVideoChoice(content, active, "Video mode", "mode",
+                    java.util.Arrays.asList("h264", "mjpeg"),
+                    selectedVideoValue(active, params, "mode"), "");
+        }
+
+        int maxFps = nano ? 60 : limits.optJSONObject("desired_fps") != null
+                ? limits.optJSONObject("desired_fps").optInt("max", 60) : limits.optInt("max_fps", 60);
+        ArrayList<String> fps = new ArrayList<>();
+        for (int value : new int[]{15, 24, 30, 40, 60}) {
+            if (value <= maxFps) fps.add(Integer.toString(value));
+        }
+        if (fps.isEmpty()) fps.add(Integer.toString(Math.max(1, maxFps)));
+        addVideoChoice(content, active, "Frame rate", "desired_fps", fps,
+                selectedVideoValue(active, params, "desired_fps"), " fps");
+
+        if (nano) {
+            if (active.hasNativeVideo()) {
+                addVideoChoice(content, active, "H.264 bitrate", "quality",
+                        java.util.Arrays.asList("1000", "2000", "3000", "5000"),
+                        selectedVideoValue(active, params, "quality"), " kbps");
+                addVideoChoice(content, active, "GOP", "gop",
+                        java.util.Arrays.asList("10", "30", "50", "100"),
+                        selectedVideoValue(active, params, "gop"), " frames");
+            } else {
+                addVideoChoice(content, active, "MJPEG quality", "quality",
+                        java.util.Arrays.asList("50", "60", "80", "100"),
+                        selectedVideoValue(active, params, "quality"), "%");
+            }
+        } else if (features != null && features.optBoolean("quality")) {
+            addVideoChoice(content, active, "JPEG quality", "quality",
+                    java.util.Arrays.asList("40", "60", "80", "100"),
+                    selectedVideoValue(active, params, "quality"), "%");
+        }
+
+        if (!nano && features != null && features.optBoolean("resolution")) {
+            ArrayList<String> resolutions = new ArrayList<>();
+            JSONArray supported = limits.optJSONArray("available_resolutions");
+            if (supported != null) {
+                for (int index = 0; index < supported.length(); index++) {
+                    String resolution = supported.optString(index, "");
+                    if (resolution.matches("[0-9]+x[0-9]+")) resolutions.add(resolution);
+                }
+            }
+            if (resolutions.isEmpty()) resolutions.addAll(java.util.Arrays.asList(
+                    "640x480", "800x600", "1024x768", "1280x720", "1920x1080"));
+            String current = selectedVideoValue(active, params, "resolution");
+            if (!current.isEmpty() && !resolutions.contains(current)) resolutions.add(0, current);
+            addVideoChoice(content, active, "Capture resolution", "resolution", resolutions,
+                    current, "");
+        } else {
+            TextView note = text("Capture resolution is controlled by the KVM or the computer's display settings.",
+                    12, MUTED);
+            content.addView(note, spaced());
+        }
+        Button fit = button("Phone display  ·  " + (fillScreen ? "Fill screen" : "Fit whole image"),
+                SURFACE, TEXT);
+        content.addView(fit, spaced());
+        fit.setOnClickListener(view -> {
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle("Phone display")
+                    .setSingleChoiceItems(new String[]{"Fit whole image", "Fill screen (crop edges)"},
+                            fillScreen ? 1 : 0, (choice, index) -> {
+                                fillScreen = index == 1;
+                                getSharedPreferences("video_preferences", MODE_PRIVATE).edit()
+                                        .putBoolean("fill_screen", fillScreen).apply();
+                                updateFastVideoTransform();
+                                screen.invalidate();
+                                choice.dismiss();
+                                if (videoSettingsDialog != null) videoSettingsDialog.dismiss();
+                                showVideoSettings();
+                            }).setNegativeButton("Cancel", null).create());
+        });
+        addVideoChoice(content, active, "Display scale", "scale",
+                java.util.Arrays.asList("50", "75", "100", "150", "200"),
+                Integer.toString(screenScalePercent), "%");
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Video settings")
+                .setView(scroll).setPositiveButton("Done", null).create();
+        videoSettingsDialog = dialog;
+        showTrackedDialog(dialog, () -> {
+            if (videoSettingsDialog == dialog) videoSettingsDialog = null;
+        });
+    }
+
+    private String selectedVideoValue(PikvmClient active, JSONObject params, String parameter) {
+        String reported = params.optString(parameter, "");
+        if (!(active instanceof NanoKvmClient) && !reported.isEmpty()) return reported;
+        String saved = getSharedPreferences("video_preferences", MODE_PRIVATE)
+                .getString(videoPreferenceKey(active, parameter), "");
+        if (saved.isEmpty() && active instanceof NanoKvmClient && "mode".equals(parameter)) return "h264";
+        if (saved.isEmpty() && active instanceof NanoKvmClient && "quality".equals(parameter)
+                && active.hasNativeVideo()) {
+            String legacy = getSharedPreferences("video_preferences", MODE_PRIVATE)
+                    .getString(active.baseUrl + "|quality", "");
+            if (legacy.matches("[0-9]+") && Integer.parseInt(legacy) > 100) return legacy;
+        }
+        return saved;
+    }
+
+    private String videoPreferenceKey(PikvmClient active, String parameter) {
+        if (active instanceof NanoKvmClient && "quality".equals(parameter)) {
+            parameter = active.hasNativeVideo() ? "quality_h264" : "quality_mjpeg";
+        }
+        return active.baseUrl + "|" + parameter;
+    }
+
+    private void addVideoChoice(LinearLayout content, PikvmClient active, String title,
+                                String parameter, List<String> values, String current, String unit) {
+        Button button = button(title + "  ·  " + (current.isEmpty() ? "Choose"
+                : videoChoiceLabel(parameter, current, unit)), SURFACE, TEXT);
+        content.addView(button, spaced());
+        button.setOnClickListener(view -> {
+            ArrayList<String> choices = new ArrayList<>(values);
+            if (!current.isEmpty() && !choices.contains(current)) choices.add(0, current);
+            String[] labels = new String[choices.size()];
+            int selected = -1;
+            for (int index = 0; index < choices.size(); index++) {
+                labels[index] = videoChoiceLabel(parameter, choices.get(index), unit);
+                if (choices.get(index).equals(current)) selected = index;
+            }
+            showTrackedDialog(new AlertDialog.Builder(this).setTitle(title)
+                    .setSingleChoiceItems(labels, selected, (dialog, index) -> {
+                        dialog.dismiss();
+                        applyVideoSetting(active, parameter, choices.get(index));
+                    }).setNegativeButton("Cancel", null).create());
+        });
+    }
+
+    private String videoChoiceLabel(String parameter, String value, String unit) {
+        if ("mode".equals(parameter)) return "mjpeg".equals(value) ? "MJPEG" : "H.264 Direct";
+        return value + unit;
+    }
+
+    private void applyVideoSetting(PikvmClient active, String parameter, String value) {
+        if ("scale".equals(parameter)) {
+            screenScalePercent = Integer.parseInt(value);
+            getSharedPreferences("video_preferences", MODE_PRIVATE).edit()
+                    .putInt(active.baseUrl + "|scale", screenScalePercent).apply();
+            updateFastVideoTransform();
+            screen.invalidate();
+            if (videoSettingsDialog != null) videoSettingsDialog.dismiss();
+            showVideoSettings();
+            return;
+        }
+        io.execute(() -> {
+            try {
+                active.setVideoParameter(parameter, value);
+                getSharedPreferences("video_preferences", MODE_PRIVATE).edit()
+                        .putString(videoPreferenceKey(active, parameter), value).apply();
+                runOnUiThread(() -> {
+                    if (client != active) return;
+                    if ("resolution".equals(parameter) || "mode".equals(parameter)) startVideo(active);
+                    Toast.makeText(this, "Video setting applied", Toast.LENGTH_SHORT).show();
+                    if (videoSettingsDialog != null) videoSettingsDialog.dismiss();
+                    showVideoSettings();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client == active) showTrackedDialog(new AlertDialog.Builder(this)
+                            .setTitle("Could not change video setting")
+                            .setMessage(error.getMessage()).setPositiveButton("OK", null).create());
+                });
+            }
+        });
     }
 
     private void showTrackedDialog(AlertDialog dialog) {
@@ -287,6 +1300,7 @@ public final class MainActivity extends FragmentActivity {
 
     private void displayLockPage() {
         locked = true;
+        closeNanoTerminal(false);
         handler.removeCallbacks(powerPoll);
         stopVideo();
         if (client != null) client.stopEvents();
@@ -532,6 +1546,11 @@ public final class MainActivity extends FragmentActivity {
         loginPage = new ScrollView(this);
         loginPage.setFillViewport(true);
         loginPage.setBackgroundColor(BG);
+        loginPage.setOnApplyWindowInsetsListener((view, insets) -> {
+            view.post(this::updateLoginKeyboardInset);
+            return insets;
+        });
+        loginPage.getViewTreeObserver().addOnGlobalLayoutListener(this::updateLoginKeyboardInset);
         LinearLayout root = column();
         root.setPadding(dp(18), dp(12), dp(18), dp(24));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -560,6 +1579,7 @@ public final class MainActivity extends FragmentActivity {
         brand.addView(brandText, new LinearLayout.LayoutParams(0, -2, 1));
         Button homeMenu = compactButton("⋮");
         homeMenu.setTextSize(28);
+        homeMenu.setBackground(rounded(PANEL));
         homeMenu.setContentDescription("More options");
         homeMenu.setOnClickListener(this::showOverflow);
         brand.addView(homeMenu, new LinearLayout.LayoutParams(dp(44), dp(48)));
@@ -587,8 +1607,12 @@ public final class MainActivity extends FragmentActivity {
         kvmHome.addView(savedPanel, spaced());
         addKvmButton = button("＋  Add KVM", PANEL, ACCENT);
         addKvmButton.setOnClickListener(view -> {
+            prepareNewKvmForm();
+            savedPanel.setVisibility(View.GONE);
+            sectionTitle.setText("ADD A KVM");
             loginPanel.setVisibility(View.VISIBLE);
             addKvmButton.setVisibility(View.GONE);
+            loginPage.post(() -> loginPage.smoothScrollTo(0, 0));
         });
         kvmHome.addView(addKvmButton, spaced());
 
@@ -600,26 +1624,35 @@ public final class MainActivity extends FragmentActivity {
         formHeader.addView(formTitle, new LinearLayout.LayoutParams(0, -2, 1));
         Button closeForm = compactButton("×");
         closeFormButton = closeForm;
-        closeForm.setContentDescription("Close connection form");
-        closeForm.setOnClickListener(view -> {
-            if (!profileStore.list().isEmpty()) {
-                loginPanel.setVisibility(View.GONE);
-                addKvmButton.setVisibility(View.VISIBLE);
-            }
-        });
-        formHeader.addView(closeForm, new LinearLayout.LayoutParams(dp(38), dp(38)));
-        closeForm.setBackground(rounded(PANEL));
-        closeForm.setTextColor(MUTED);
+        closeForm.setContentDescription("Close Add KVM form");
+        closeForm.setOnClickListener(view -> closeAddKvmForm());
+        formHeader.addView(closeForm, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        closeForm.setTextSize(26);
+        closeForm.setTypeface(null, 1);
+        closeForm.setBackground(rounded(SURFACE));
+        closeForm.setTextColor(TEXT);
         loginPanel.addView(formHeader);
         loginPanel.addView(text("Use the login from your KVM web page.", 13, MUTED));
-        addressInput = field("PiKVM address, e.g. pikvm.local", false);
+        deviceTypeInput = button("KVM type  ·  Choose  ▾", SURFACE, TEXT);
+        deviceTypeInput.setOnClickListener(view -> showTrackedDialog(new AlertDialog.Builder(this)
+                .setTitle("KVM type")
+                .setSingleChoiceItems(new String[]{"PiKVM", "NanoKVM"},
+                        "nanokvm".equals(selectedDeviceType) ? 1 : 0, (dialog, index) -> {
+                            setDeviceType(index == 1 ? "nanokvm" : "pikvm");
+                            dialog.dismiss();
+                        })
+                .setNegativeButton("Cancel", null).create()));
+        loginPanel.addView(deviceTypeInput, spaced());
+        addressInput = field("KVM address or URL", false);
         userInput = field("Username", false);
         passwordInput = field("Password", true);
         trustedAddress = getPreferences(0).getString("address", "");
         trustedFingerprint = getPreferences(0).getString("pin", "");
-        addressInput.setText(trustedAddress);
-        userInput.setText(getPreferences(0).getString("user", ""));
+        setDeviceType("");
         for (EditText input : new EditText[]{addressInput, userInput, passwordInput}) {
+            input.setOnFocusChangeListener((view, focused) -> {
+                if (focused) loginPage.post(this::updateLoginKeyboardInset);
+            });
             loginPanel.addView(input, spaced());
         }
         rememberInput = new CheckBox(this);
@@ -627,7 +1660,7 @@ public final class MainActivity extends FragmentActivity {
         rememberInput.setTextColor(TEXT);
         rememberInput.setChecked(true);
         loginPanel.addView(rememberInput, spaced());
-        loginPanel.addView(text("Passwords and trusted certificates stay on this phone. For 2FA, use a fresh code.", 12, MUTED), spaced());
+        loginPanel.addView(text("NanoKVM uses its own address. For HTTP-only NanoKVMs, enter http:// explicitly; HTTP sends credentials without encryption. For PiKVM 2FA, use a fresh code.", 12, MUTED), spaced());
         loginButton = button("Connect", ACCENT, BG);
         loginButton.setOnClickListener(view -> login());
         loginPanel.addView(loginButton, spaced());
@@ -662,7 +1695,6 @@ public final class MainActivity extends FragmentActivity {
                     ? insets.getInsets(WindowInsets.Type.systemBars()).top : insets.getSystemWindowInsetTop();
             consoleBottomInset = Build.VERSION.SDK_INT >= 30
                     ? insets.getInsets(WindowInsets.Type.systemBars()).bottom : insets.getSystemWindowInsetBottom();
-            view.setPadding(0, consoleTopInset, 0, consoleBottomInset);
             view.post(this::updateConsoleKeyboardInset);
             return insets;
         });
@@ -672,8 +1704,11 @@ public final class MainActivity extends FragmentActivity {
         toolbar.setBackgroundColor(CONSOLE_BG);
         Button disconnect = compactButton("‹");
         disconnect.setTextSize(29);
-        disconnect.setContentDescription("Disconnect and choose another KVM");
-        disconnect.setOnClickListener(view -> logout());
+        disconnect.setContentDescription("Close terminal or disconnect KVM");
+        disconnect.setOnClickListener(view -> {
+            if (terminalPanel != null) closeNanoTerminal(true);
+            else logout();
+        });
         toolbar.addView(disconnect, new LinearLayout.LayoutParams(dp(42), dp(46)));
         consoleTitle = text("KVM console", 13, TEXT);
         consoleTitle.setTypeface(null, 1);
@@ -736,22 +1771,9 @@ public final class MainActivity extends FragmentActivity {
 
         extraKeys = column();
         extraKeys.setBackgroundColor(CONSOLE_BG);
-        extraKeys.addView(compactKeyRow(new String[][]{
-                {"ESC", "Escape"}, {"/", "Slash"}, {"−", "Minus"},
-                {"HOME", "Home"}, {"↑", "ArrowUp"}, {"END", "End"}, {"PGUP", "PageUp"}
-        }));
-        extraKeys.addView(compactKeyRow(new String[][]{
-                {"TAB", "Tab"}, {"CTRL", "ControlLeft"}, {"ALT", "AltLeft"},
-                {"←", "ArrowLeft"}, {"↓", "ArrowDown"}, {"→", "ArrowRight"}, {"PGDN", "PageDown"}
-        }));
-        String[][] functionKeys = new String[13][2];
-        for (int n = 1; n <= 12; n++) {
-            functionKeys[n - 1][0] = "F" + n;
-            functionKeys[n - 1][1] = "F" + n;
-        }
-        functionKeys[12][0] = "DEL";
-        functionKeys[12][1] = "Delete";
-        extraKeys.addView(keyRow(functionKeys));
+        extraKeys.addView(compactKeyRow(ExtraKeyLayout.FIRST));
+        extraKeys.addView(compactKeyRow(ExtraKeyLayout.SECOND));
+        extraKeys.addView(keyRow(ExtraKeyLayout.FUNCTIONS));
         consolePage.addView(extraKeys);
 
     }
@@ -862,15 +1884,47 @@ public final class MainActivity extends FragmentActivity {
             installDownloadedUpdate();
     }
 
+    private void updateLoginKeyboardInset() {
+        if (loginPage == null || !loginPage.isAttachedToWindow() || loginPage.getHeight() == 0) return;
+        Rect visible = new Rect();
+        loginPage.getWindowVisibleDisplayFrame(visible);
+        int[] position = new int[2];
+        loginPage.getLocationOnScreen(position);
+        int contentBottom = position[1] + loginPage.getHeight();
+        int covered = Math.max(0, contentBottom - visible.bottom);
+        WindowInsets insets = loginPage.getRootWindowInsets();
+        Point display = new Point();
+        getWindowManager().getDefaultDisplay().getRealSize(display);
+        boolean keyboardShown = display.y - visible.bottom > dp(160);
+        int keyboardTop = visible.bottom;
+        if (Build.VERSION.SDK_INT >= 30 && insets != null
+                && insets.isVisible(WindowInsets.Type.ime())) {
+            keyboardShown = true;
+            keyboardTop = display.y - insets.getInsets(WindowInsets.Type.ime()).bottom;
+            covered = Math.max(covered, Math.max(0, contentBottom - keyboardTop));
+        }
+        if (loginPage.getPaddingBottom() != covered) loginPage.setPadding(0, 0, 0, covered);
+        if (!keyboardShown || loginPanel == null || loginPanel.getVisibility() != View.VISIBLE) return;
+        View focused = getCurrentFocus();
+        if (focused != addressInput && focused != userInput && focused != passwordInput) return;
+        int[] fieldPosition = new int[2];
+        focused.getLocationOnScreen(fieldPosition);
+        int viewportBottom = Math.min(contentBottom - covered,
+                Math.min(visible.bottom, keyboardTop));
+        int below = fieldPosition[1] + focused.getHeight() + dp(12) - viewportBottom;
+        if (below > 0) loginPage.scrollBy(0, below);
+        else if (fieldPosition[1] < position[1] + dp(12))
+            loginPage.scrollBy(0, fieldPosition[1] - position[1] - dp(12));
+    }
+
     private void updateConsoleKeyboardInset() {
         if (consolePage == null || !consolePage.isAttachedToWindow() || consolePage.getHeight() == 0) return;
         Rect visible = new Rect();
         consolePage.getWindowVisibleDisplayFrame(visible);
         WindowInsets insets = consolePage.getRootWindowInsets();
-        boolean keyboardShown = (Build.VERSION.SDK_INT >= 30 && insets != null
-                && insets.isVisible(WindowInsets.Type.ime()))
-                || consolePage.getRootView().getHeight() - visible.bottom > dp(140);
-        if (extraKeys != null) extraKeys.setVisibility(keyboardShown ? View.VISIBLE : View.GONE);
+        boolean keyboardShown = isConsoleKeyboardShown(insets, visible);
+        if (extraKeys != null && extraKeys.getVisibility() != (keyboardShown ? View.VISIBLE : View.GONE))
+            extraKeys.setVisibility(keyboardShown ? View.VISIBLE : View.GONE);
         int[] position = new int[2];
         consolePage.getLocationOnScreen(position);
         int contentBottom = position[1] + consolePage.getHeight();
@@ -887,6 +1941,12 @@ public final class MainActivity extends FragmentActivity {
         if (consolePage.getPaddingTop() != consoleTopInset || consolePage.getPaddingBottom() != bottom) {
             consolePage.setPadding(0, consoleTopInset, 0, bottom);
         }
+    }
+
+    private boolean isConsoleKeyboardShown(WindowInsets insets, Rect visible) {
+        if (Build.VERSION.SDK_INT >= 30 && insets != null)
+            return insets.isVisible(WindowInsets.Type.ime());
+        return consolePage.getRootView().getHeight() - visible.bottom > dp(160);
     }
 
     private HorizontalScrollView keyRow(String[][] keys) {
@@ -986,12 +2046,15 @@ public final class MainActivity extends FragmentActivity {
         Rect visible = new Rect();
         consolePage.getWindowVisibleDisplayFrame(visible);
         WindowInsets insets = consolePage.getRootWindowInsets();
-        boolean shown = (Build.VERSION.SDK_INT >= 30 && insets != null
-                && insets.isVisible(WindowInsets.Type.ime()))
-                || consolePage.getRootView().getHeight() - visible.bottom > dp(140);
+        boolean shown = isConsoleKeyboardShown(insets, visible);
         if (shown) {
-            keyboard.hideSoftInputFromWindow(remoteInput.getWindowToken(), 0);
+            View focused = terminalPanel == null ? remoteInput : getCurrentFocus();
+            if (focused != null) keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
         } else {
+            if (terminalPanel != null) {
+                terminalPanel.showKeyboard();
+                return;
+            }
             remoteInput.requestFocus();
             keyboard.restartInput(remoteInput);
             remoteInput.post(() -> keyboard.showSoftInput(remoteInput, InputMethodManager.SHOW_IMPLICIT));
@@ -1037,7 +2100,7 @@ public final class MainActivity extends FragmentActivity {
             address.setSingleLine(true);
             address.setEllipsize(android.text.TextUtils.TruncateAt.END);
             detail.addView(address);
-            detail.addView(text(profile.user + (profile.wolMac.isEmpty()
+            detail.addView(text(("nanokvm".equals(profile.type) ? "NanoKVM" : "PiKVM") + "  ·  " + profile.user + (profile.wolMac.isEmpty()
                     ? "  ·  Saved connection" : "  ·  Wake-on-LAN ready"), 12, MUTED));
             content.addView(detail, new LinearLayout.LayoutParams(0, -2, 1));
             item.addView(content);
@@ -1089,17 +2152,21 @@ public final class MainActivity extends FragmentActivity {
     private void showWakeOnLanDialog(ProfileStore.Profile profile) {
         LinearLayout form = column();
         form.setPadding(dp(20), dp(8), dp(20), 0);
+        boolean nano = "nanokvm".equals(profile.type);
         form.addView(text("Enter the computer's wired network MAC, not the KVM's. "
-                + "NanoKVM sends WOL directly; PiKVM needs its WOL GPIO output configured.", 13, MUTED));
+                + (nano ? "NanoKVM sends the packet on its own LAN."
+                        : "PiKVM needs its WOL GPIO output configured."), 13, MUTED));
         EditText mac = field("Computer MAC, e.g. AA:BB:CC:DD:EE:FF", false);
         mac.setText(profile.wolMac);
         form.addView(mac, spaced());
         EditText gpioChannel = field("PiKVM WOL GPIO channel (optional)", false);
         gpioChannel.setText(profile.wolGpioChannel);
-        form.addView(gpioChannel, spaced());
-        form.addView(text("Leave the channel blank to detect a WOL-named PiKVM output. "
-                + "If PiKVM has several WOL outputs, enter the channel for this computer.",
-                12, MUTED), spaced());
+        if (!nano) {
+            form.addView(gpioChannel, spaced());
+            form.addView(text("Leave the channel blank to detect a WOL-named PiKVM output. "
+                    + "If PiKVM has several WOL outputs, enter the channel for this computer.",
+                    12, MUTED), spaced());
+        }
         ScrollView scroll = new ScrollView(this);
         scroll.addView(form);
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
@@ -1122,7 +2189,7 @@ public final class MainActivity extends FragmentActivity {
                 .setOnClickListener(view -> {
                     try {
                         String normalizedMac = WakeOnLan.canonicalMac(mac.getText().toString());
-                        String channel = gpioChannel.getText().toString().trim();
+                        String channel = nano ? "" : gpioChannel.getText().toString().trim();
                         if (!channel.isEmpty() && !channel.matches("[A-Za-z0-9_]{1,64}")) {
                             throw new IllegalArgumentException("PiKVM channel must use letters, numbers, or underscores.");
                         }
@@ -1140,7 +2207,7 @@ public final class MainActivity extends FragmentActivity {
 
     private ProfileStore.Profile activeWakeProfile() {
         for (ProfileStore.Profile profile : profileStore.list()) {
-            if (profile.address.equals(activeAddress) && profile.user.equals(activeUser)
+            if (profile.type.equals(activeType) && profile.address.equals(activeAddress) && profile.user.equals(activeUser)
                     && !profile.wolMac.isEmpty()) return profile;
         }
         return null;
@@ -1171,6 +2238,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void connectSavedProfile(ProfileStore.Profile profile) {
+        setDeviceType(profile.type);
         addressInput.setText(profile.address);
         userInput.setText(profile.user);
         trustedAddress = profile.address;
@@ -1178,43 +2246,87 @@ public final class MainActivity extends FragmentActivity {
         try {
             passwordInput.setText(profileStore.password(profile));
             rememberInput.setChecked(true);
-            login();
+            login(profile.type);
         } catch (Exception error) {
             passwordInput.setText("");
             showMessage("Saved password is unavailable. Enter it again to reconnect.");
         }
     }
 
+    private void prepareNewKvmForm() {
+        setDeviceType("");
+        addressInput.setText("");
+        userInput.setText("");
+        passwordInput.setText("");
+        rememberInput.setChecked(true);
+    }
+
+    private void closeAddKvmForm() {
+        if (profileStore.list().isEmpty()) return;
+        View focused = getCurrentFocus();
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null && focused != null)
+            keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+        if (focused != null) focused.clearFocus();
+        renderSavedProfiles();
+        loginPage.post(() -> loginPage.smoothScrollTo(0, 0));
+    }
+
+    private void setDeviceType(String type) {
+        selectedDeviceType = "nanokvm".equals(type) ? "nanokvm"
+                : "pikvm".equals(type) ? "pikvm" : "";
+        deviceTypeInput.setText("KVM type  ·  "
+                + ("nanokvm".equals(selectedDeviceType) ? "NanoKVM"
+                : "pikvm".equals(selectedDeviceType) ? "PiKVM" : "Choose") + "  ▾");
+    }
+
     private void login() {
+        if (selectedDeviceType.isEmpty()) {
+            showMessage("Choose PiKVM or NanoKVM first.");
+            return;
+        }
+        login(selectedDeviceType);
+    }
+
+    private void login(String type) {
         String address = addressInput.getText().toString().trim();
         String user = userInput.getText().toString().trim();
         String password = passwordInput.getText().toString();
-        String pin = address.equals(trustedAddress) ? trustedFingerprint : "";
+        String pin = address.equals(trustedAddress) && !address.startsWith("http://") ? trustedFingerprint : "";
         boolean remember = rememberInput.isChecked();
         if (address.isEmpty() || user.isEmpty() || password.isEmpty()) {
             showMessage("Enter the KVM address, username, and password.");
             return;
         }
         loginButton.setEnabled(false);
-        showMessage("Connecting…");
+        showMessage("Connecting to " + ("nanokvm".equals(type) ? "NanoKVM" : "PiKVM") + "…");
         io.execute(() -> {
             try {
-                PikvmClient next = new PikvmClient(address, pin);
+                PikvmClient next = "nanokvm".equals(type)
+                        ? new NanoKvmClient(address, pin) : new PikvmClient(address, pin);
                 next.login(user, password);
-                next.prepareNativeVideo(user, password);
+                if (next instanceof NanoKvmClient) {
+                    String savedMode = getSharedPreferences("video_preferences", MODE_PRIVATE)
+                            .getString(next.baseUrl + "|mode", "h264");
+                    ((NanoKvmClient) next).restoreVideoMode(savedMode);
+                }
                 String saveError = null;
                 if (remember) {
-                    try { profileStore.save(address, user, pin, password); }
+                    try { profileStore.save(type, address, user, pin, password); }
                     catch (Exception error) { saveError = "Connected, but could not save this KVM."; }
                 }
                 String finalSaveError = saveError;
                 runOnUiThread(() -> {
                     client = next;
+                    screenScalePercent = getSharedPreferences("video_preferences", MODE_PRIVATE)
+                            .getInt(next.baseUrl + "|scale", 100);
                     activeAddress = address;
                     activeUser = user;
+                    activeType = type;
                     consoleTitle.setText(address);
                     if (remember) {
                         getPreferences(0).edit().putString("address", address).putString("user", user)
+                                .putString("type", type)
                                 .putString("pin", pin).apply();
                     } else {
                         getPreferences(0).edit().clear().apply();
@@ -1241,7 +2353,7 @@ public final class MainActivity extends FragmentActivity {
                 if (certificateError(error)) {
                     try {
                         String fingerprint = PikvmClient.certificateFingerprint(address);
-                        runOnUiThread(() -> showCertificateDialog(address, fingerprint, !pin.isEmpty()));
+                        runOnUiThread(() -> showCertificateDialog(type, address, fingerprint, !pin.isEmpty()));
                         return;
                     } catch (Exception inspectionError) {
                         // Show the original connection failure below.
@@ -1263,7 +2375,7 @@ public final class MainActivity extends FragmentActivity {
         return false;
     }
 
-    private void showCertificateDialog(String address, String fingerprint, boolean changed) {
+    private void showCertificateDialog(String type, String address, String fingerprint, boolean changed) {
         if (locked) return;
         loginButton.setEnabled(true);
         showMessage("Trust confirmation required");
@@ -1277,7 +2389,7 @@ public final class MainActivity extends FragmentActivity {
                 .setPositiveButton("Trust and connect", (dialog, which) -> {
                     trustedAddress = address;
                     trustedFingerprint = fingerprint;
-                    login();
+                    login(type);
                 })
                 .create());
     }
@@ -1331,8 +2443,7 @@ public final class MainActivity extends FragmentActivity {
 
     private void updateFastVideoTransform() {
         if (videoWidth <= 0 || videoHeight <= 0 || fastVideo.getWidth() <= 0 || fastVideo.getHeight() <= 0) return;
-        float scale = Math.min((float) fastVideo.getWidth() / videoWidth,
-                (float) fastVideo.getHeight() / videoHeight);
+        float scale = videoScale(fastVideo.getWidth(), fastVideo.getHeight(), videoWidth, videoHeight);
         Matrix transform = new Matrix();
         transform.setScale(videoWidth * scale / fastVideo.getWidth(),
                 videoHeight * scale / fastVideo.getHeight(),
@@ -1443,13 +2554,22 @@ public final class MainActivity extends FragmentActivity {
         PikvmClient active = client;
         if (active == null) return;
         flushTextNow();
-        List<String> held = new ArrayList<>(modifiers);
-        modifiers.clear();
-        updateModifierButtons();
+        List<String> held = consumeModifiers();
+        if (terminalPanel != null) {
+            terminalPanel.sendKey(code, held);
+            return;
+        }
         io.execute(() -> {
             try { active.sendKey(code, held); }
             catch (Exception error) { runOnUiThread(() -> showMessage(error.getMessage())); }
         });
+    }
+
+    private List<String> consumeModifiers() {
+        List<String> held = new ArrayList<>(modifiers);
+        modifiers.clear();
+        updateModifierButtons();
+        return held;
     }
 
     private void sendRemoteText(String value) {
@@ -1513,8 +2633,7 @@ public final class MainActivity extends FragmentActivity {
 
     private PointF screenPoint(float x, float y) {
         if (videoWidth <= 0 || videoHeight <= 0 || screen.getWidth() == 0 || screen.getHeight() == 0) return null;
-        float scale = Math.min((float) screen.getWidth() / videoWidth,
-                (float) screen.getHeight() / videoHeight);
+        float scale = videoScale(screen.getWidth(), screen.getHeight(), videoWidth, videoHeight);
         float width = videoWidth * scale, height = videoHeight * scale;
         float left = (screen.getWidth() - width) / 2, top = (screen.getHeight() - height) / 2;
         return new PointF(Math.max(0f, Math.min(1f, (x - left) / width)),
@@ -1531,13 +2650,19 @@ public final class MainActivity extends FragmentActivity {
 
     private void queueRelativeMouseMove(float dx, float dy) {
         if (client == null || videoWidth <= 0 || videoHeight <= 0) return;
-        float scale = Math.min((float) screen.getWidth() / videoWidth,
-                (float) screen.getHeight() / videoHeight);
+        float scale = videoScale(screen.getWidth(), screen.getHeight(), videoWidth, videoHeight);
         float width = videoWidth * scale, height = videoHeight * scale;
         if (width <= 0 || height <= 0) return;
         pointerX = Math.max(0f, Math.min(1f, pointerX + dx * 1.35f / width));
         pointerY = Math.max(0f, Math.min(1f, pointerY + dy * 1.35f / height));
         enqueueMouseMove(new PointF(pointerX, pointerY));
+    }
+
+    private float videoScale(int viewWidth, int viewHeight, int frameWidth, int frameHeight) {
+        float horizontal = (float) viewWidth / frameWidth;
+        float vertical = (float) viewHeight / frameHeight;
+        return (fillScreen ? Math.max(horizontal, vertical) : Math.min(horizontal, vertical))
+                * screenScalePercent / 100f;
     }
 
     private void enqueueMouseMove(PointF point) {
@@ -1655,6 +2780,11 @@ public final class MainActivity extends FragmentActivity {
                     return true;
                 }
                 @Override public boolean sendKeyEvent(KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_MULTIPLE
+                            && event.getCharacters() != null) {
+                        sendRemoteText(event.getCharacters());
+                        return true;
+                    }
                     if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
                     if (event.getKeyCode() == KeyEvent.KEYCODE_DEL) sendKey("Backspace");
                     else if (event.getKeyCode() == KeyEvent.KEYCODE_ENTER) sendKey("Enter");
@@ -1687,8 +2817,7 @@ public final class MainActivity extends FragmentActivity {
             super.onDraw(canvas);
             Bitmap frame = currentFrame;
             if (frame == null || getWidth() == 0 || getHeight() == 0) return;
-            float scale = Math.min((float) getWidth() / frame.getWidth(),
-                    (float) getHeight() / frame.getHeight());
+            float scale = videoScale(getWidth(), getHeight(), frame.getWidth(), frame.getHeight());
             float width = frame.getWidth() * scale, height = frame.getHeight() * scale;
             float left = (getWidth() - width) / 2, top = (getHeight() - height) / 2;
             canvas.drawBitmap(frame, null, new RectF(left, top, left + width, top + height), videoPaint);
@@ -1879,6 +3008,14 @@ public final class MainActivity extends FragmentActivity {
         view.setMinHeight(dp(48));
         view.setBackground(rounded(color));
         return view;
+    }
+    private TextView deviceTypeLabel(String value, boolean dropdown) {
+        TextView label = text(value + (dropdown ? "" : "  ▾"), 15, TEXT);
+        label.setGravity(Gravity.CENTER_VERTICAL);
+        label.setPadding(dp(14), 0, dp(14), 0);
+        label.setMinHeight(dp(48));
+        if (dropdown) label.setBackgroundColor(PANEL);
+        return label;
     }
     private GradientDrawable rounded(int color) {
         GradientDrawable drawable = new GradientDrawable();

@@ -80,13 +80,14 @@ final class UpdateManager {
     }
 
     private static int compareVersions(String a, String b) {
-        String[] left = a.split("\\."), right = b.split("\\.");
+        String[] leftVersion = a.split("-", 2), rightVersion = b.split("-", 2);
+        String[] left = leftVersion[0].split("\\."), right = rightVersion[0].split("\\.");
         for (int i = 0; i < Math.max(left.length, right.length); i++) {
             long x = i < left.length ? Long.parseLong(left[i]) : 0;
             long y = i < right.length ? Long.parseLong(right[i]) : 0;
             if (x != y) return Long.compare(x, y);
         }
-        return 0;
+        return Boolean.compare(rightVersion.length > 1, leftVersion.length > 1);
     }
 
     File download(Release release, Progress progress) throws Exception {
