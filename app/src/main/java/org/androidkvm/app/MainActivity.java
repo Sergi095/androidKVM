@@ -157,6 +157,7 @@ public final class MainActivity extends FragmentActivity {
     private boolean trackpadMode;
     private boolean fillScreen;
     private int screenScalePercent = 100;
+    private float videoOffsetX, videoOffsetY;
     private float pointerX = 0.5f, pointerY = 0.5f;
     private int consoleTopInset, consoleBottomInset;
 
@@ -1182,7 +1183,7 @@ public final class MainActivity extends FragmentActivity {
                             }).setNegativeButton("Cancel", null).create());
         });
         addVideoChoice(content, active, "Display scale", "scale",
-                java.util.Arrays.asList("50", "75", "100", "150", "200"),
+                java.util.Arrays.asList("50", "75", "100", "150", "200", "300", "400"),
                 Integer.toString(screenScalePercent), "%");
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
@@ -1761,7 +1762,7 @@ public final class MainActivity extends FragmentActivity {
         });
         videoArea.addView(fastVideo, new FrameLayout.LayoutParams(-1, -1));
         screen = new RemoteScreen(this);
-        screen.setContentDescription("Remote screen. Touch to move pointer; tap to click.");
+        screen.setContentDescription("Remote screen. Tap to click, double tap to double click, hold for right click, or pinch to zoom.");
         videoArea.addView(screen, new FrameLayout.LayoutParams(-1, -1));
         consolePage.addView(videoArea, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -1989,7 +1990,20 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void bindKey(Button key, String label, String code) {
-        if (code.equals("ControlLeft") || code.equals("AltLeft") || code.equals("ShiftLeft")) {
+        if (code.equals("MetaLeft")) {
+            modifierButtons.add(key);
+            key.setTag(new String[]{label, code});
+            key.setContentDescription("Windows or Command key. Tap to press; hold to use with the next key.");
+            key.setOnClickListener(view -> {
+                if (terminalPanel != null || modifiers.contains(code)) toggleModifier(code);
+                else sendKey(code);
+            });
+            key.setOnLongClickListener(view -> {
+                toggleModifier(code);
+                key.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                return true;
+            });
+        } else if (code.equals("ControlLeft") || code.equals("AltLeft") || code.equals("ShiftLeft")) {
             modifierButtons.add(key);
             key.setTag(new String[]{label, code});
             key.setOnClickListener(view -> toggleModifier(code));
@@ -2320,6 +2334,7 @@ public final class MainActivity extends FragmentActivity {
                     client = next;
                     screenScalePercent = getSharedPreferences("video_preferences", MODE_PRIVATE)
                             .getInt(next.baseUrl + "|scale", 100);
+                    videoOffsetX = videoOffsetY = 0f;
                     activeAddress = address;
                     activeUser = user;
                     activeType = type;
@@ -2399,6 +2414,7 @@ public final class MainActivity extends FragmentActivity {
         active.ensureEvents();
         currentFrame = null;
         videoWidth = videoHeight = 0;
+        videoOffsetX = videoOffsetY = 0f;
         screen.invalidate();
         if (active.hasNativeVideo()) {
             videoStatus.setText("Connecting to H.264 video…");
@@ -2443,11 +2459,13 @@ public final class MainActivity extends FragmentActivity {
 
     private void updateFastVideoTransform() {
         if (videoWidth <= 0 || videoHeight <= 0 || fastVideo.getWidth() <= 0 || fastVideo.getHeight() <= 0) return;
+        clampVideoOffset();
         float scale = videoScale(fastVideo.getWidth(), fastVideo.getHeight(), videoWidth, videoHeight);
         Matrix transform = new Matrix();
         transform.setScale(videoWidth * scale / fastVideo.getWidth(),
                 videoHeight * scale / fastVideo.getHeight(),
                 fastVideo.getWidth() / 2f, fastVideo.getHeight() / 2f);
+        transform.postTranslate(videoOffsetX, videoOffsetY);
         fastVideo.setTransform(transform);
     }
 
@@ -2635,7 +2653,8 @@ public final class MainActivity extends FragmentActivity {
         if (videoWidth <= 0 || videoHeight <= 0 || screen.getWidth() == 0 || screen.getHeight() == 0) return null;
         float scale = videoScale(screen.getWidth(), screen.getHeight(), videoWidth, videoHeight);
         float width = videoWidth * scale, height = videoHeight * scale;
-        float left = (screen.getWidth() - width) / 2, top = (screen.getHeight() - height) / 2;
+        float left = (screen.getWidth() - width) / 2 + videoOffsetX;
+        float top = (screen.getHeight() - height) / 2 + videoOffsetY;
         return new PointF(Math.max(0f, Math.min(1f, (x - left) / width)),
                 Math.max(0f, Math.min(1f, (y - top) / height)));
     }
@@ -2663,6 +2682,15 @@ public final class MainActivity extends FragmentActivity {
         float vertical = (float) viewHeight / frameHeight;
         return (fillScreen ? Math.max(horizontal, vertical) : Math.min(horizontal, vertical))
                 * screenScalePercent / 100f;
+    }
+
+    private void clampVideoOffset() {
+        if (videoWidth <= 0 || videoHeight <= 0 || screen == null) return;
+        float scale = videoScale(screen.getWidth(), screen.getHeight(), videoWidth, videoHeight);
+        float maxX = Math.max(0f, (videoWidth * scale - screen.getWidth()) / 2f);
+        float maxY = Math.max(0f, (videoHeight * scale - screen.getHeight()) / 2f);
+        videoOffsetX = Math.max(-maxX, Math.min(maxX, videoOffsetX));
+        videoOffsetY = Math.max(-maxY, Math.min(maxY, videoOffsetY));
     }
 
     private void enqueueMouseMove(PointF point) {
@@ -2705,18 +2733,6 @@ public final class MainActivity extends FragmentActivity {
         });
     }
 
-    private void mouseButton(String button, boolean down) {
-        PikvmClient active = client;
-        if (active == null) return;
-        mouseIo.execute(() -> {
-            try {
-                sendPendingMouseMoves(active);
-                active.mouseButton(button, down);
-            }
-            catch (Exception error) { runOnUiThread(() -> showMessage(error.getMessage())); }
-        });
-    }
-
     private void mouseWheel(int steps) {
         PikvmClient active = client;
         if (active == null || steps == 0) return;
@@ -2731,13 +2747,16 @@ public final class MainActivity extends FragmentActivity {
             super(context);
             setFocusable(true);
             setFocusableInTouchMode(true);
+            setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         }
 
         @Override public boolean onCheckIsTextEditor() { return true; }
 
         @Override public InputConnection onCreateInputConnection(EditorInfo info) {
-            info.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
-            info.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_NONE;
+            info.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+            info.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                    | EditorInfo.IME_ACTION_NONE;
             return new BaseInputConnection(this, false) {
                 private String composing = "";
 
@@ -2808,8 +2827,10 @@ public final class MainActivity extends FragmentActivity {
         private float startX, startY;
         private float lastX, lastY;
         private float lastTapX, lastTapY, scrollY;
+        private float pinchStartDistance, pinchStartScale, pinchStartMidX, pinchStartMidY;
+        private float pinchLastMidX, pinchLastMidY;
         private long lastTapAt;
-        private boolean moved, multiTouch, scrolled, dragging;
+        private boolean moved, multiTouch, scrolled, wheelScrolled, pinching, heldRightClick;
 
         RemoteScreen(Context context) { super(context); }
 
@@ -2817,10 +2838,23 @@ public final class MainActivity extends FragmentActivity {
             super.onDraw(canvas);
             Bitmap frame = currentFrame;
             if (frame == null || getWidth() == 0 || getHeight() == 0) return;
+            clampVideoOffset();
             float scale = videoScale(getWidth(), getHeight(), frame.getWidth(), frame.getHeight());
             float width = frame.getWidth() * scale, height = frame.getHeight() * scale;
-            float left = (getWidth() - width) / 2, top = (getHeight() - height) / 2;
+            float left = (getWidth() - width) / 2 + videoOffsetX;
+            float top = (getHeight() - height) / 2 + videoOffsetY;
             canvas.drawBitmap(frame, null, new RectF(left, top, left + width, top + height), videoPaint);
+        }
+
+        @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+            super.onSizeChanged(width, height, oldWidth, oldHeight);
+            clampVideoOffset();
+            updateFastVideoTransform();
+        }
+
+        private float pointerDistance(MotionEvent event) {
+            return (float) Math.hypot(event.getX(1) - event.getX(0),
+                    event.getY(1) - event.getY(0));
         }
 
         @Override public boolean onTouchEvent(MotionEvent event) {
@@ -2830,13 +2864,14 @@ public final class MainActivity extends FragmentActivity {
                     startY = event.getY();
                     lastX = startX;
                     lastY = startY;
-                    moved = multiTouch = scrolled = dragging = false;
+                    moved = multiTouch = scrolled = wheelScrolled = pinching = heldRightClick = false;
                     resetKeyboardComposition();
                     if (!trackpadMode) queueMouseMove(startX, startY);
                     longPress = () -> {
                         if (!moved && !multiTouch && client != null) {
-                            dragging = true;
-                            mouseButton("left", true);
+                            heldRightClick = true;
+                            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                            mouseClick("right", 1);
                         }
                     };
                     handler.postDelayed(longPress, ViewConfiguration.getLongPressTimeout());
@@ -2844,25 +2879,58 @@ public final class MainActivity extends FragmentActivity {
                 case MotionEvent.ACTION_POINTER_DOWN:
                     cancelRemoteLongPress();
                     multiTouch = true;
-                    scrollY = (event.getY(0) + event.getY(1)) / 2;
-                    if (dragging) {
-                        mouseButton("left", false);
-                        dragging = false;
-                    }
+                    pinchLastMidX = (event.getX(0) + event.getX(1)) / 2f;
+                    pinchLastMidY = (event.getY(0) + event.getY(1)) / 2f;
+                    pinchStartMidX = pinchLastMidX;
+                    pinchStartMidY = pinchLastMidY;
+                    scrollY = pinchLastMidY;
+                    pinchStartDistance = pointerDistance(event);
+                    pinchStartScale = screenScalePercent;
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     if (multiTouch && event.getPointerCount() >= 2) {
-                        float currentY = (event.getY(0) + event.getY(1)) / 2;
-                        int steps = (int) ((currentY - scrollY) / dp(28));
-                        if (steps != 0) {
-                            mouseWheel(steps);
-                            scrollY += steps * dp(28);
-                            scrolled = true;
+                        float midX = (event.getX(0) + event.getX(1)) / 2f;
+                        float midY = (event.getY(0) + event.getY(1)) / 2f;
+                        float distance = pointerDistance(event);
+                        if (!wheelScrolled && !pinching && Math.abs(distance - pinchStartDistance) > dp(8))
+                            pinching = true;
+                        if (pinching && videoWidth > 0 && videoHeight > 0) {
+                            PointF focus = screenPoint(pinchLastMidX, pinchLastMidY);
+                            screenScalePercent = Math.max(50, Math.min(400,
+                                    Math.round(pinchStartScale * distance / Math.max(1f, pinchStartDistance))));
+                            float scale = videoScale(getWidth(), getHeight(), videoWidth, videoHeight);
+                            if (focus != null) {
+                                videoOffsetX = midX - (focus.x - 0.5f) * videoWidth * scale - getWidth() / 2f;
+                                videoOffsetY = midY - (focus.y - 0.5f) * videoHeight * scale - getHeight() / 2f;
+                            }
+                            clampVideoOffset();
+                            updateFastVideoTransform();
+                            invalidate();
+                        } else if (videoWidth > 0 && videoHeight > 0
+                                && (videoWidth * videoScale(getWidth(), getHeight(), videoWidth, videoHeight) > getWidth() + 1
+                                || videoHeight * videoScale(getWidth(), getHeight(), videoWidth, videoHeight) > getHeight() + 1)) {
+                            videoOffsetX += midX - pinchLastMidX;
+                            videoOffsetY += midY - pinchLastMidY;
+                            clampVideoOffset();
+                            updateFastVideoTransform();
+                            invalidate();
+                            if (Math.hypot(midX - pinchStartMidX, midY - pinchStartMidY) > slop)
+                                scrolled = true;
+                        } else {
+                            int steps = (int) ((midY - scrollY) / dp(28));
+                            if (steps != 0) {
+                                mouseWheel(steps);
+                                scrollY += steps * dp(28);
+                                scrolled = true;
+                                wheelScrolled = true;
+                            }
                         }
+                        pinchLastMidX = midX;
+                        pinchLastMidY = midY;
                     } else if (!multiTouch) {
                         if (Math.hypot(event.getX() - startX, event.getY() - startY) > slop) {
                             moved = true;
-                            if (!dragging) cancelRemoteLongPress();
+                            cancelRemoteLongPress();
                         }
                         if (trackpadMode) queueRelativeMouseMove(event.getX() - lastX, event.getY() - lastY);
                         else queueMouseMove(event.getX(), event.getY());
@@ -2878,11 +2946,13 @@ public final class MainActivity extends FragmentActivity {
                         if (trackpadMode) queueRelativeMouseMove(event.getX() - lastX, event.getY() - lastY);
                         else queueMouseMove(event.getX(), event.getY());
                     }
-                    if (dragging) {
-                        mouseButton("left", false);
-                    } else if (multiTouch) {
-                        if (!scrolled) mouseClick("right", 1);
-                    } else if (!moved) {
+                    if (pinching && client != null) {
+                        getSharedPreferences("video_preferences", MODE_PRIVATE).edit()
+                                .putInt(client.baseUrl + "|scale", screenScalePercent).apply();
+                    }
+                    if (multiTouch) {
+                        if (!scrolled && !pinching) mouseClick("left", 2);
+                    } else if (!moved && !heldRightClick) {
                         performClick();
                         long now = android.os.SystemClock.uptimeMillis();
                         if (pendingClick != null && now - lastTapAt <= ViewConfiguration.getDoubleTapTimeout()
@@ -2909,7 +2979,8 @@ public final class MainActivity extends FragmentActivity {
                     return true;
                 case MotionEvent.ACTION_CANCEL:
                     cancelRemoteLongPress();
-                    if (dragging) mouseButton("left", false);
+                    if (pinching && client != null) getSharedPreferences("video_preferences", MODE_PRIVATE)
+                            .edit().putInt(client.baseUrl + "|scale", screenScalePercent).apply();
                     return true;
                 default:
                     return true;
@@ -2925,8 +2996,7 @@ public final class MainActivity extends FragmentActivity {
             cancelRemoteLongPress();
             if (pendingClick != null) handler.removeCallbacks(pendingClick);
             pendingClick = null;
-            if (dragging) mouseButton("left", false);
-            dragging = false;
+            pinching = heldRightClick = false;
         }
 
         @Override public boolean performClick() {
@@ -2987,6 +3057,7 @@ public final class MainActivity extends FragmentActivity {
     }
     private EditText field(String hint, boolean password) {
         EditText view = new EditText(this);
+        view.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         view.setSingleLine(true);
         view.setTextColor(TEXT);
         view.setHintTextColor(MUTED);

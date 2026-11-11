@@ -9,6 +9,13 @@
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(document.getElementById('terminal'));
+  const keyboardInput = document.querySelector('.xterm-helper-textarea');
+  if (keyboardInput) {
+    keyboardInput.setAttribute('autocomplete', 'off');
+    keyboardInput.setAttribute('autocorrect', 'off');
+    keyboardInput.setAttribute('autocapitalize', 'off');
+    keyboardInput.setAttribute('spellcheck', 'false');
+  }
   term.onData(data => AndroidTerminal.send(data));
   term.onResize(({ rows, cols }) => AndroidTerminal.resize(rows, cols));
 

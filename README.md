@@ -33,9 +33,9 @@ If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own
 
 | To do this | Use this |
 | --- | --- |
-| Move and click | Touch the video. Double tap to double click; long press and move to drag. Two-finger tap to right click; swipe with two fingers to scroll. |
+| Move and click | Touch the video to move the pointer. Tap to click, double tap (or tap with two fingers) to double click, and hold to right click. Pinch to zoom; move two fingers to pan while zoomed. Swipe with two fingers to scroll when the image fits the screen. |
 | Adjust video | Tap **⋮ → Video settings**. PiKVM settings stay limited to frame rate, JPEG quality, supported capture resolutions, and phone display. NanoKVM also offers H.264 or MJPEG, bitrate, and GOP. |
-| Type | Tap **⌨** for your Android keyboard. The extra key bar includes Ctrl, Alt, arrows, F1–F12, and Delete. Hide the keyboard to enlarge the screen. |
+| Type | Tap **⌨** for your Android keyboard. The extra key bar includes Ctrl, Alt, **WIN/⌘**, arrows, F1–F12, and Delete. Tap WIN/⌘ to open the host menu; hold it, then press another key for shortcuts. In the terminal, tap it as a Meta modifier. Hide the keyboard to enlarge the screen. |
 | Use a NanoKVM terminal | Tap **⋮ → NanoKVM terminal** for its shell, or **Serial terminal** to choose a port and speed. The terminal opens inside the console and uses the same extra keys above your Android keyboard. |
 | Configure NanoKVM | Tap **⋮ → NanoKVM settings** for its password, device, USB, Wi-Fi, DNS, and system controls. Open its full web interface there for other settings. **Security settings** manages the app's PIN and biometrics. |
 | Reconnect input hardware | Tap **⋮ → Reset HID**. |

@@ -193,13 +193,15 @@ final class NanoTerminalPanel extends LinearLayout {
     private static String applyModifiers(String value, List<String> modifiers) {
         boolean controlPressed = modifiers.contains("ControlLeft");
         boolean altPressed = modifiers.contains("AltLeft");
+        boolean metaPressed = modifiers.contains("MetaLeft");
         if (controlPressed && value.length() == 1) {
             char character = Character.toUpperCase(value.charAt(0));
             if (character >= '@' && character <= '_') value = String.valueOf((char) (character - '@'));
             else if (character == '/') value = "\u001f";
             else if (character == '?') value = "\u007f";
-        } else if ((controlPressed || altPressed) && value.startsWith("\u001b")) {
-            int modifier = 1 + (controlPressed ? 4 : 0) + (altPressed ? 2 : 0);
+        } else if ((controlPressed || altPressed || metaPressed) && value.startsWith("\u001b")) {
+            int modifier = 1 + (controlPressed ? 4 : 0) + (altPressed ? 2 : 0)
+                    + (metaPressed ? 8 : 0);
             if (value.startsWith("\u001bO") && value.length() == 3)
                 return "\u001b[1;" + modifier + value.charAt(2);
             if (value.startsWith("\u001b[") && value.endsWith("~"))
@@ -207,7 +209,7 @@ final class NanoTerminalPanel extends LinearLayout {
             if (value.startsWith("\u001b[") && value.length() == 3)
                 return "\u001b[1;" + modifier + value.charAt(2);
         }
-        return altPressed ? "\u001b" + value : value;
+        return altPressed || metaPressed ? "\u001b" + value : value;
     }
 
     private static String terminalSequence(String code) {

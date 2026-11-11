@@ -348,6 +348,12 @@ class PikvmClient {
             }
             if (sent) return;
         }
+        if (modifiers.isEmpty() && "MetaLeft".equals(code)) {
+            String path = "/api/hid/events/send_key?key=MetaLeft&state=";
+            request(path + "1", "POST", new byte[0], "text/plain");
+            request(path + "0", "POST", new byte[0], "text/plain");
+            return;
+        }
         String path = modifiers.isEmpty()
                 ? "/api/hid/events/send_key?key=" + encode(code)
                 : "/api/hid/events/send_shortcut?keys=" + encode(String.join(",", modifiers) + "," + code);

@@ -7,7 +7,7 @@ final class ExtraKeyLayout {
             {"HOME", "Home"}, {"↑", "ArrowUp"}, {"END", "End"}, {"PGUP", "PageUp"}
     };
     static final String[][] SECOND = {
-            {"TAB", "Tab"}, {"CTRL", "ControlLeft"}, {"ALT", "AltLeft"},
+            {"TAB", "Tab"}, {"CTRL", "ControlLeft"}, {"ALT", "AltLeft"}, {"WIN/⌘", "MetaLeft"},
             {"←", "ArrowLeft"}, {"↓", "ArrowDown"}, {"→", "ArrowRight"}, {"PGDN", "PageDown"}
     };
     static final String[][] FUNCTIONS = functionKeys();
