@@ -69,12 +69,6 @@ jobs:
           ANDROIDKVM_KEY_ALIAS: ${{ secrets.ANDROIDKVM_KEY_ALIAS }}
           ANDROIDKVM_KEY_PASSWORD: ${{ secrets.ANDROIDKVM_KEY_PASSWORD }}
         run: ./gradlew --no-daemon assembleGithubRelease
-      - name: Build signed F-Droid reference APK
-        env:
-          ANDROIDKVM_STORE_PASSWORD: ${{ secrets.ANDROIDKVM_STORE_PASSWORD }}
-          ANDROIDKVM_KEY_ALIAS: ${{ secrets.ANDROIDKVM_KEY_ALIAS }}
-          ANDROIDKVM_KEY_PASSWORD: ${{ secrets.ANDROIDKVM_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleFdroidRelease
       - name: Verify tag and APK version
         run: |
           apk_version=$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/github/release/app-github-release.apk | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
@@ -85,6 +79,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/github/release/app-github-release.apk "androidKVM-${GITHUB_REF_NAME}.apk"
-          cp app/build/outputs/apk/fdroid/release/app-fdroid-release.apk "androidKVM-fdroid-${GITHUB_REF_NAME}.apk"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" "androidKVM-${GITHUB_REF_NAME}.apk" "androidKVM-fdroid-${GITHUB_REF_NAME}.apk" --clobber
+          gh release upload "$GITHUB_REF_NAME" "androidKVM-${GITHUB_REF_NAME}.apk" --clobber
