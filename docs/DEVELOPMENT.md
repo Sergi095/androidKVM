@@ -2,7 +2,7 @@
 
 ## Build
 
-Requires JDK 17 and Android SDK platform 35. For a local test APK:
+Requires JDK 17 or newer and Android SDK platform 37.0. For a local test APK:
 
 ```sh
 ./gradlew assembleGithubDebug
@@ -28,11 +28,13 @@ Keep the release keystore safe: Android updates require the same signing key. Th
 ## Connection details
 
 - PiKVM requires HTTPS. NanoKVM supports HTTPS and explicit `http://` addresses because its stock firmware uses HTTP; HTTP sends credentials without transport encryption. Saved passwords are encrypted with a key in Android Keystore. Android backup is disabled. An unrecognized HTTPS certificate must be explicitly trusted; the app then pins that certificate for the saved KVM. A changed certificate prompts again.
+- Android 17 requires the Nearby devices permission for direct local network connections. The app requests `ACCESS_LOCAL_NETWORK` at connect time and resumes the connection after unlock if the system prompt temporarily locks the app. Backup and device transfer are both excluded by data extraction rules.
 - For PiKVM with two-factor authentication, append the current one-time code to the password during login, as described in the [PiKVM API](https://docs.pikvm.org/api/).
 - PiKVM video uses MJPEG. NanoKVM connects directly to its web API and uses H.264 Direct with MJPEG fallback. Audio and virtual media are not implemented.
 - NanoKVM video settings use `POST /api/vm/screen`. Its API does not report current values, so the app shows the last values set on this phone. Capture resolution is controlled by the device and host; display scale changes only the phone view.
 - NanoKVM shell and serial terminals use its authenticated `/api/vm/terminal` WebSocket. The serial view starts `picocom` inside that shell with the selected port and line settings. The terminal renderer bundles xterm.js and addon-fit under their MIT licenses in `app/src/main/assets/terminal`.
 - NanoKVM device settings use its authenticated API. Password changes encrypt both password fields as the NanoKVM web client does, update an existing saved profile, then open a new session because the server revokes the old one.
+- NanoKVM scripts use its authenticated `/api/vm/script` routes. The app limits uploads to 1 MB and permits only simple `.sh` or `.py` filenames because the upstream server runs script names through a shell. Foreground output is capped at 1 MB; background runs return without logs. Scripts execute on the NanoKVM device with its privileges. PiKVM's Macro menu controls keyboard macros and has no matching device script manager API.
 - The optional full NanoKVM web interface receives the current session cookie inside a same-origin WebView. On HTTPS, certificate errors are accepted only when the presented certificate matches the fingerprint already trusted for that KVM.
 - Reset HID uses each device's `/api/hid/reset` endpoint.
 - ATX buttons follow the KVM's reported power LED state. If the screen is live but the power LED is reported off, check the KVM's ATX sensing.
@@ -48,5 +50,7 @@ Keep the release keystore safe: Android updates require the same signing key. Th
 - [NanoKVM HID WebSocket](https://github.com/sipeed/NanoKVM/blob/main/server/service/ws/client.go)
 - [NanoKVM video settings API](https://github.com/sipeed/NanoKVM/blob/main/server/service/vm/screen.go)
 - [NanoKVM terminal client](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/terminal/index.tsx)
+- [NanoKVM script API](https://github.com/sipeed/NanoKVM/blob/main/server/service/vm/script.go)
+- [PiKVM Macro menu](https://docs.pikvm.org/webui/#the-macro-menu)
 - [NanoKVM device settings routes](https://github.com/sipeed/NanoKVM/blob/main/server/router/vm.go)
 - [NanoKVM account routes](https://github.com/sipeed/NanoKVM/blob/main/server/router/auth.go)

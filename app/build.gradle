@@ -6,7 +6,7 @@ def releaseKeyFile = System.getenv('ANDROIDKVM_KEYSTORE')
 
 android {
     namespace 'org.androidkvm.app'
-    compileSdk 35
+    compileSdk 37
 
     buildFeatures {
         buildConfig true
@@ -15,9 +15,9 @@ android {
     defaultConfig {
         applicationId 'org.androidkvm.app'
         minSdk 26
-        targetSdk 35
-        versionCode 32
-        versionName '0.2.7'
+        targetSdk 37
+        versionCode 34
+        versionName '0.2.8'
     }
 
     dependenciesInfo {
@@ -62,7 +62,8 @@ android {
 }
 
 dependencies {
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    implementation 'androidx.core:core:1.13.1'
+    implementation 'com.squareup.okhttp3:okhttp:5.5.1'
+    implementation 'androidx.core:core:1.19.1'
     implementation 'androidx.biometric:biometric:1.1.0'
+    testImplementation 'junit:junit:4.13.2'
 }

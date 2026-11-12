@@ -201,7 +201,7 @@ class PikvmClient {
             byte[] buffer = new byte[4096];
             int count;
             while ((count = stream.read(buffer)) != -1) {
-                if (output.size() + count > limit) throw new IOException("PiKVM response is too large.");
+                if (output.size() + count > limit) throw new IOException("KVM response is too large.");
                 output.write(buffer, 0, count);
             }
             return output.toByteArray();

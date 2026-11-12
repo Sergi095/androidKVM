@@ -4,6 +4,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -13,7 +14,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -50,6 +53,11 @@ final class NanoKvmClient extends PikvmClient {
     }
 
     private HttpURLConnection connectNano(String path, String method, byte[] body) throws IOException {
+        return connectNano(path, method, body, "application/json; charset=utf-8");
+    }
+
+    private HttpURLConnection connectNano(String path, String method, byte[] body,
+                                           String contentType) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         if (connection instanceof HttpsURLConnection && pinned) {
             HttpsURLConnection secure = (HttpsURLConnection) connection;
@@ -58,6 +66,7 @@ final class NanoKvmClient extends PikvmClient {
         }
         connection.setConnectTimeout(7000);
         connection.setReadTimeout(path.startsWith("/api/stream/") ? 30000
+                : "/api/vm/script/run".equals(path) ? 300000
                 : "/api/network/wifi/connect".equals(path) ? 45000
                 : "/api/network/wifi/disconnect".equals(path) ? 30000 : 12000);
         connection.setRequestMethod(method);
@@ -66,7 +75,7 @@ final class NanoKvmClient extends PikvmClient {
         if (cookie != null) connection.setRequestProperty("Cookie", cookie);
         if (body != null) {
             connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestProperty("Content-Type", contentType);
             connection.setFixedLengthStreamingMode(body.length);
             try (OutputStream output = connection.getOutputStream()) { output.write(body); }
         }
@@ -74,12 +83,19 @@ final class NanoKvmClient extends PikvmClient {
     }
 
     private JSONObject requestNano(String path, String method, JSONObject body) throws IOException {
-        HttpURLConnection connection = connectNano(path, method,
-                body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8));
+        return requestNanoBytes(path, method,
+                body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8),
+                "application/json; charset=utf-8");
+    }
+
+    private JSONObject requestNanoBytes(String path, String method, byte[] body,
+                                        String contentType) throws IOException {
+        HttpURLConnection connection = connectNano(path, method, body, contentType);
         try {
             int status = connection.getResponseCode();
             InputStream stream = status < 400 ? connection.getInputStream() : connection.getErrorStream();
-            String raw = stream == null ? "" : new String(readLimited(stream, 65536), StandardCharsets.UTF_8);
+            int limit = "/api/vm/script/run".equals(path) ? 1048576 : 65536;
+            String raw = stream == null ? "" : new String(readLimited(stream, limit), StandardCharsets.UTF_8);
             JSONObject response = raw.isEmpty() ? new JSONObject() : new JSONObject(raw);
             if (status != 200 || response.optInt("code", -1) != 0) {
                 String reason = response.optString("msg", "NanoKVM request failed");
@@ -166,6 +182,60 @@ final class NanoKvmClient extends PikvmClient {
 
     @Override void resetHid() throws IOException {
         requestNano("/api/hid/reset", "POST", new JSONObject());
+    }
+
+    static boolean safeScriptName(String name) {
+        return name != null && name.matches("(?i)[a-z0-9][a-z0-9._-]{0,95}\\.(sh|py)");
+    }
+
+    List<String> listScripts() throws IOException {
+        JSONArray files = requestNano("/api/vm/script", "GET", null).optJSONArray("files");
+        List<String> result = new ArrayList<>();
+        if (files != null) for (int index = 0; index < files.length(); index++) {
+            String name = files.optString(index, "");
+            if (!name.isEmpty()) result.add(name);
+        }
+        return result;
+    }
+
+    String runScript(String name, boolean background) throws IOException {
+        requireSafeScriptName(name);
+        try {
+            JSONObject result = requestNano("/api/vm/script/run", "POST", new JSONObject()
+                    .put("name", name).put("type", background ? "background" : "foreground"));
+            return result.optString("log", "");
+        } catch (JSONException error) {
+            throw new IOException("Invalid script request", error);
+        }
+    }
+
+    void deleteScript(String name) throws IOException {
+        requireSafeScriptName(name);
+        try {
+            requestNano("/api/vm/script", "DELETE", new JSONObject().put("name", name));
+        } catch (JSONException error) {
+            throw new IOException("Invalid script request", error);
+        }
+    }
+
+    void uploadScript(String name, byte[] script) throws IOException {
+        requireSafeScriptName(name);
+        if (script.length > 1048576) throw new IOException("Script exceeds 1 MB");
+        String boundary = "androidKVM-" + UUID.randomUUID();
+        byte[] prefix = ("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\""
+                + name + "\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+                .getBytes(StandardCharsets.UTF_8);
+        byte[] suffix = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
+        byte[] body = new byte[prefix.length + script.length + suffix.length];
+        System.arraycopy(prefix, 0, body, 0, prefix.length);
+        System.arraycopy(script, 0, body, prefix.length, script.length);
+        System.arraycopy(suffix, 0, body, prefix.length + script.length, suffix.length);
+        requestNanoBytes("/api/vm/script/upload", "POST", body,
+                "multipart/form-data; boundary=" + boundary);
+    }
+
+    private static void requireSafeScriptName(String name) throws IOException {
+        if (!safeScriptName(name)) throw new IOException("Use a simple .sh or .py filename with letters, numbers, dots, underscores, or hyphens.");
     }
 
     JSONObject setting(String path) throws IOException {

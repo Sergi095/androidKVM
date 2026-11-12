@@ -1,8 +1,13 @@
 package org.androidkvm.app;
 
 import android.app.AlertDialog;
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.OpenableColumns;
 import android.net.http.SslCertificate;
 import android.net.http.SslError;
 import android.graphics.Bitmap;
@@ -59,6 +64,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import androidx.core.content.ContextCompat;
+import androidx.activity.OnBackPressedCallback;
 import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
 import androidx.fragment.app.FragmentActivity;
@@ -67,6 +73,9 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.security.MessageDigest;
 import java.security.cert.CertificateFactory;
@@ -93,12 +102,16 @@ public final class MainActivity extends FragmentActivity {
     private static final int ACCENT = Color.rgb(41, 197, 239);
     private static final int KEY_ACCENT = Color.rgb(76, 205, 184);
     private static final int DANGER = Color.rgb(182, 77, 82);
+    private static final int SCRIPT_PICK_REQUEST = 4718;
+    private static final int LOCAL_NETWORK_REQUEST = 4719;
+    private static final int SCRIPT_MAX_BYTES = 1048576;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ExecutorService mouseIo = Executors.newSingleThreadExecutor();
     private final ExecutorService wolIo = Executors.newSingleThreadExecutor();
     private final ExecutorService securityIo = Executors.newSingleThreadExecutor();
+    private final ExecutorService scriptIo = Executors.newSingleThreadExecutor();
     private final StringBuilder pendingText = new StringBuilder();
     private final Runnable textFlush = this::flushTextNow;
     private final AtomicReference<PointF> pendingMove = new AtomicReference<>();
@@ -109,6 +122,9 @@ public final class MainActivity extends FragmentActivity {
     private AlertDialog securitySettingsDialog;
     private AlertDialog videoSettingsDialog;
     private NanoTerminalPanel terminalPanel;
+    private NanoKvmClient scriptPickClient;
+    private Uri pendingScriptUri;
+    private String pendingLocalNetworkLoginType;
     private PikvmClient client;
     private MjpegReader videoReader;
     private H264Reader h264Reader;
@@ -168,6 +184,9 @@ public final class MainActivity extends FragmentActivity {
         getWindow().setNavigationBarColor(BG);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         buildUi();
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { handleBackNavigation(); }
+        });
         biometricPrompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
                 new BiometricPrompt.AuthenticationCallback() {
                     @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
@@ -228,6 +247,7 @@ public final class MainActivity extends FragmentActivity {
     @Override public void onResume() {
         super.onResume();
         foreground = true;
+        resumeScriptPick();
         if (locked && securityStore.hasBiometrics()) {
             handler.postDelayed(this::promptBiometricUnlock, 150);
         }
@@ -262,10 +282,11 @@ public final class MainActivity extends FragmentActivity {
         if (updateController != null) updateController.close();
         wolIo.shutdownNow();
         securityIo.shutdownNow();
+        scriptIo.shutdownNow();
         super.onDestroy();
     }
 
-    @Override public void onBackPressed() {
+    private void handleBackNavigation() {
         if (hideVisibleKeyboard()) return;
         for (int index = openDialogs.size() - 1; index >= 0; index--) {
             AlertDialog dialog = openDialogs.get(index);
@@ -321,6 +342,10 @@ public final class MainActivity extends FragmentActivity {
                 });
                 menu.getMenu().add("NanoKVM terminal").setOnMenuItemClickListener(item -> {
                     openNanoTerminal(null);
+                    return true;
+                });
+                menu.getMenu().add("NanoKVM scripts").setOnMenuItemClickListener(item -> {
+                    showNanoScripts();
                     return true;
                 });
                 menu.getMenu().add("Serial terminal").setOnMenuItemClickListener(item -> {
@@ -444,6 +469,205 @@ public final class MainActivity extends FragmentActivity {
         scroll.addView(items);
         showTrackedDialog(new AlertDialog.Builder(this).setTitle("NanoKVM settings")
                 .setView(scroll).setPositiveButton("Done", null).create());
+    }
+
+    private void showNanoScripts() {
+        if (!(client instanceof NanoKvmClient) || locked) return;
+        NanoKvmClient active = (NanoKvmClient) client;
+        LinearLayout content = column();
+        content.setPadding(dp(18), dp(6), dp(18), dp(16));
+        content.addView(text("Scripts run on the NanoKVM device, not on the connected computer.",
+                13, MUTED), spaced());
+        LinearLayout actions = row();
+        Button upload = button("Upload", ACCENT, BG);
+        Button refresh = button("Refresh", SURFACE, TEXT);
+        actions.addView(upload, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, -2, 1);
+        refreshParams.leftMargin = dp(8);
+        actions.addView(refresh, refreshParams);
+        content.addView(actions, spaced());
+        LinearLayout list = column();
+        content.addView(list, spaced());
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("NanoKVM scripts")
+                .setView(scroll).setPositiveButton("Done", null).create();
+        upload.setOnClickListener(view -> {
+            scriptPickClient = active;
+            pendingScriptUri = null;
+            Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            picker.setType("*/*");
+            picker.addCategory(Intent.CATEGORY_OPENABLE);
+            dialog.dismiss();
+            try {
+                startActivityForResult(picker, SCRIPT_PICK_REQUEST);
+            } catch (Exception error) {
+                scriptPickClient = null;
+                showNanoScriptError(active, error);
+            }
+        });
+        refresh.setOnClickListener(view -> loadNanoScripts(active, dialog, list));
+        showTrackedDialog(dialog);
+        loadNanoScripts(active, dialog, list);
+    }
+
+    private void loadNanoScripts(NanoKvmClient active, AlertDialog dialog, LinearLayout list) {
+        list.removeAllViews();
+        list.addView(text("Loading scripts…", 14, MUTED));
+        scriptIo.execute(() -> {
+            try {
+                List<String> scripts = active.listScripts();
+                runOnUiThread(() -> {
+                    if (client != active || locked || !dialog.isShowing()) return;
+                    list.removeAllViews();
+                    if (scripts.isEmpty()) list.addView(text("No scripts uploaded yet.", 14, MUTED));
+                    for (String name : scripts) addNanoScriptRow(active, dialog, list, name);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (client != active || locked || !dialog.isShowing()) return;
+                    list.removeAllViews();
+                    list.addView(text("Could not load scripts: " + error.getMessage(), 14, DANGER));
+                });
+            }
+        });
+    }
+
+    private void addNanoScriptRow(NanoKvmClient active, AlertDialog dialog,
+                                  LinearLayout list, String name) {
+        LinearLayout item = panel();
+        TextView title = text(name, 15, TEXT);
+        title.setTextIsSelectable(true);
+        item.addView(title);
+        boolean safe = NanoKvmClient.safeScriptName(name);
+        if (safe) {
+            LinearLayout actions = row();
+            Button run = button("Run", ACCENT, BG);
+            Button background = button("Background", SURFACE, TEXT);
+            Button delete = button("Delete", DANGER, TEXT);
+            run.setTextSize(12);
+            background.setTextSize(12);
+            delete.setTextSize(12);
+            LinearLayout.LayoutParams part = new LinearLayout.LayoutParams(0, -2, 1);
+            part.rightMargin = dp(5);
+            actions.addView(run, part);
+            LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(0, -2, 1.35f);
+            middle.rightMargin = dp(5);
+            actions.addView(background, middle);
+            actions.addView(delete, new LinearLayout.LayoutParams(0, -2, 1));
+            item.addView(actions, spaced());
+            run.setOnClickListener(view -> runNanoScript(active, name, false));
+            background.setOnClickListener(view -> runNanoScript(active, name, true));
+            delete.setOnClickListener(view -> showTrackedDialog(new AlertDialog.Builder(this)
+                    .setTitle("Delete script?")
+                    .setMessage(name + " will be removed from NanoKVM.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete", (ignored, which) -> scriptIo.execute(() -> {
+                        try {
+                            active.deleteScript(name);
+                            runOnUiThread(() -> {
+                                if (client == active && !locked && dialog.isShowing())
+                                    loadNanoScripts(active, dialog, list);
+                            });
+                        } catch (Exception error) { showNanoScriptError(active, error); }
+                    })).create()));
+        } else {
+            item.addView(text("Unsupported filename; manage this script in the NanoKVM web interface.",
+                    12, DANGER), spaced());
+        }
+        list.addView(item, spaced());
+    }
+
+    private void runNanoScript(NanoKvmClient active, String name, boolean background) {
+        if (client != active || locked) return;
+        Toast.makeText(this, background ? "Starting script…" : "Running script…", Toast.LENGTH_SHORT).show();
+        scriptIo.execute(() -> {
+            try {
+                String output = active.runScript(name, background);
+                runOnUiThread(() -> {
+                    if (client != active || locked) return;
+                    if (background) {
+                        Toast.makeText(this, "Started " + name, Toast.LENGTH_SHORT).show();
+                    } else {
+                        TextView log = text(output.isEmpty() ? "Script finished with no output." : output,
+                                13, TEXT);
+                        log.setTypeface(android.graphics.Typeface.MONOSPACE);
+                        log.setTextIsSelectable(true);
+                        log.setPadding(dp(16), dp(8), dp(16), dp(8));
+                        ScrollView scroll = new ScrollView(this);
+                        scroll.addView(log);
+                        showTrackedDialog(new AlertDialog.Builder(this).setTitle(name + " output")
+                                .setView(scroll).setPositiveButton("Done", null).create());
+                    }
+                });
+            } catch (Exception error) { showNanoScriptError(active, error); }
+        });
+    }
+
+    private void showNanoScriptError(NanoKvmClient active, Exception error) {
+        runOnUiThread(() -> {
+            if (client == active && !locked) showTrackedDialog(new AlertDialog.Builder(this)
+                    .setTitle("NanoKVM scripts")
+                    .setMessage(error.getMessage()).setPositiveButton("OK", null).create());
+        });
+    }
+
+    private void resumeScriptPick() {
+        if (!foreground || locked || pendingScriptUri == null || scriptPickClient == null) return;
+        NanoKvmClient active = scriptPickClient;
+        Uri uri = pendingScriptUri;
+        pendingScriptUri = null;
+        scriptPickClient = null;
+        if (client != active) return;
+        String documentName = "script.sh";
+        try (Cursor cursor = getContentResolver().query(uri,
+                new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) documentName = cursor.getString(0);
+        } catch (Exception ignored) { }
+        EditText nameInput = field("script.sh or script.py", false);
+        nameInput.setText(documentName);
+        LinearLayout content = column();
+        content.setPadding(dp(20), dp(8), dp(20), dp(8));
+        content.addView(text("The script will run with NanoKVM device privileges. An existing script with the same name will be replaced.",
+                13, MUTED));
+        content.addView(nameInput, spaced());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Upload NanoKVM script")
+                .setView(content).setNegativeButton("Cancel", null)
+                .setPositiveButton("Upload", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String name = nameInput.getText().toString().trim();
+                    if (!NanoKvmClient.safeScriptName(name)) {
+                        nameInput.setError("Use a simple .sh or .py filename.");
+                        return;
+                    }
+                    dialog.dismiss();
+                    scriptIo.execute(() -> {
+                        try {
+                            byte[] bytes = readScriptFile(uri);
+                            active.uploadScript(name, bytes);
+                            runOnUiThread(() -> {
+                                if (client == active && !locked) showNanoScripts();
+                            });
+                        } catch (Exception error) { showNanoScriptError(active, error); }
+                    });
+                }));
+        showTrackedDialog(dialog);
+    }
+
+    private byte[] readScriptFile(Uri uri) throws IOException {
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) throw new IOException("Could not open the selected script.");
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (output.size() + count > SCRIPT_MAX_BYTES)
+                    throw new IOException("Script exceeds 1 MB.");
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
     }
 
     private void nanoSettingButton(LinearLayout items, String label, Runnable action) {
@@ -1309,7 +1533,7 @@ public final class MainActivity extends FragmentActivity {
         mascot.setImageResource(R.drawable.ic_launcher);
         root.addView(mascot, new LinearLayout.LayoutParams(dp(70), dp(70)));
         TextView title = text("Unlock androidKVM", 25, TEXT);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title, spaced());
         root.addView(text("Your saved KVMs are locked.", 14, MUTED), spaced());
         lockStatus = text("", 13, MUTED);
@@ -1388,6 +1612,12 @@ public final class MainActivity extends FragmentActivity {
         lockPage = null;
         lockPinInput = null;
         lockStatus = null;
+        resumeScriptPick();
+        if (pendingLocalNetworkLoginType != null) {
+            String type = pendingLocalNetworkLoginType;
+            pendingLocalNetworkLoginType = null;
+            login(type);
+        }
     }
 
     private void promptBiometricUnlock() {
@@ -1562,7 +1792,7 @@ public final class MainActivity extends FragmentActivity {
         LinearLayout brandText = column();
         brandText.setPadding(dp(10), 0, 0, 0);
         TextView title = text("androidKVM", 24, TEXT);
-        title.setTypeface(null, 1);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         brandText.addView(title);
         brandText.addView(text("Your KVMs, in your pocket", 12, MUTED));
         brand.addView(brandText, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1590,7 +1820,7 @@ public final class MainActivity extends FragmentActivity {
         kvmTab.setOnClickListener(view -> showHomeTab(false));
         updatesTab.setOnClickListener(view -> showHomeTab(true));
         sectionTitle = text("MY KVMS", 12, ACCENT);
-        sectionTitle.setTypeface(null, 1);
+        sectionTitle.setTypeface(null, android.graphics.Typeface.BOLD);
         kvmHome.addView(sectionTitle, spaced());
 
         savedPanel = column();
@@ -1610,7 +1840,7 @@ public final class MainActivity extends FragmentActivity {
         kvmHome.addView(loginPanel, spaced());
         LinearLayout formHeader = row();
         TextView formTitle = text("Connect a KVM", 19, TEXT);
-        formTitle.setTypeface(null, 1);
+        formTitle.setTypeface(null, android.graphics.Typeface.BOLD);
         formHeader.addView(formTitle, new LinearLayout.LayoutParams(0, -2, 1));
         Button closeForm = compactButton("×");
         closeFormButton = closeForm;
@@ -1618,7 +1848,7 @@ public final class MainActivity extends FragmentActivity {
         closeForm.setOnClickListener(view -> closeAddKvmForm());
         formHeader.addView(closeForm, new LinearLayout.LayoutParams(dp(44), dp(44)));
         closeForm.setTextSize(26);
-        closeForm.setTypeface(null, 1);
+        closeForm.setTypeface(null, android.graphics.Typeface.BOLD);
         closeForm.setBackground(rounded(SURFACE));
         closeForm.setTextColor(TEXT);
         loginPanel.addView(formHeader);
@@ -1664,7 +1894,7 @@ public final class MainActivity extends FragmentActivity {
             LinearLayout updatePanel = panel();
             updatesHome.addView(updatePanel, spaced());
             TextView updateTitle = text("App updates", 20, TEXT);
-            updateTitle.setTypeface(null, 1);
+            updateTitle.setTypeface(null, android.graphics.Typeface.BOLD);
             updatePanel.addView(updateTitle);
             updatePanel.addView(text("Installed: " + BuildConfig.VERSION_NAME, 13, MUTED), spaced());
             updatePanel.addView(text("Source: github.com/Sergi095/androidKVM", 13, MUTED), spaced());
@@ -1704,7 +1934,7 @@ public final class MainActivity extends FragmentActivity {
         });
         toolbar.addView(disconnect, new LinearLayout.LayoutParams(dp(42), dp(46)));
         consoleTitle = text("KVM console", 13, TEXT);
-        consoleTitle.setTypeface(null, 1);
+        consoleTitle.setTypeface(null, android.graphics.Typeface.BOLD);
         consoleTitle.setSingleLine(true);
         consoleTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         consoleTitle.setGravity(Gravity.CENTER_VERTICAL);
@@ -1786,7 +2016,29 @@ public final class MainActivity extends FragmentActivity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == SCRIPT_PICK_REQUEST) {
+            if (resultCode == RESULT_OK && data != null) pendingScriptUri = data.getData();
+            else scriptPickClient = null;
+            handler.post(this::resumeScriptPick);
+            return;
+        }
         if (updateController != null) updateController.onActivityResult(requestCode);
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                                      int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != LOCAL_NETWORK_REQUEST) return;
+        if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+            pendingLocalNetworkLoginType = null;
+            showMessage("Allow Nearby devices access to connect to a KVM on your local network.");
+            return;
+        }
+        if (!locked && pendingLocalNetworkLoginType != null) {
+            String type = pendingLocalNetworkLoginType;
+            pendingLocalNetworkLoginType = null;
+            login(type);
+        }
     }
 
     private void updateLoginKeyboardInset() {
@@ -2014,7 +2266,7 @@ public final class MainActivity extends FragmentActivity {
             LinearLayout detail = column();
             detail.setPadding(dp(12), 0, 0, 0);
             TextView address = text(profile.address, 15, TEXT);
-            address.setTypeface(null, 1);
+            address.setTypeface(null, android.graphics.Typeface.BOLD);
             address.setSingleLine(true);
             address.setEllipsize(android.text.TextUtils.TruncateAt.END);
             detail.addView(address);
@@ -2214,6 +2466,12 @@ public final class MainActivity extends FragmentActivity {
         boolean remember = rememberInput.isChecked();
         if (address.isEmpty() || user.isEmpty() || password.isEmpty()) {
             showMessage("Enter the KVM address, username, and password.");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
+            pendingLocalNetworkLoginType = type;
+            requestPermissions(new String[]{Manifest.permission.ACCESS_LOCAL_NETWORK}, LOCAL_NETWORK_REQUEST);
             return;
         }
         loginButton.setEnabled(false);
@@ -2911,6 +3169,9 @@ public final class MainActivity extends FragmentActivity {
 
     private void logout() {
         PikvmClient old = client;
+        pendingLocalNetworkLoginType = null;
+        scriptPickClient = null;
+        pendingScriptUri = null;
         screen.resetGesture();
         pendingMove.set(null);
         handler.removeCallbacks(textFlush);
@@ -2939,8 +3200,8 @@ public final class MainActivity extends FragmentActivity {
         if (client != null && videoStatus != null) videoStatus.setText(result);
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    private LinearLayout column() { LinearLayout view = new LinearLayout(this); view.setOrientation(1); return view; }
-    private LinearLayout row() { LinearLayout view = new LinearLayout(this); view.setOrientation(0); view.setGravity(Gravity.CENTER_VERTICAL); return view; }
+    private LinearLayout column() { LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); return view; }
+    private LinearLayout row() { LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.HORIZONTAL); view.setGravity(Gravity.CENTER_VERTICAL); return view; }
     private LinearLayout panel() {
         LinearLayout view = column();
         view.setPadding(dp(14), dp(14), dp(14), dp(14));

@@ -145,7 +145,7 @@ final class UpdateManager {
         PackageInfo installed = pm.getPackageInfo(context.getPackageName(), flag);
         if (incoming == null || !context.getPackageName().equals(incoming.packageName)
                 || !release.version.equals(incoming.versionName)
-                || incoming.getLongVersionCode() <= installed.getLongVersionCode())
+                || packageVersionCode(incoming) <= packageVersionCode(installed))
             throw new IllegalStateException("Downloaded APK is not a newer androidKVM build.");
         Signature[] newSigners = signers(incoming), currentSigners = signers(installed);
         if (newSigners == null || currentSigners == null || newSigners.length != currentSigners.length)
@@ -156,6 +156,10 @@ final class UpdateManager {
             if (!Arrays.equals(newSigners[i].toByteArray(), currentSigners[i].toByteArray()))
                 throw new IllegalStateException("Downloaded APK has an unexpected signing key.");
         }
+    }
+
+    private static long packageVersionCode(PackageInfo info) {
+        return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
     }
 
     private static Signature[] signers(PackageInfo info) {

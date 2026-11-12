@@ -25,7 +25,7 @@ flowchart LR
 
 1. **Install** the [signed release APK](https://github.com/Sergi095/androidKVM/releases/latest).
 2. **Add a KVM.** Select PiKVM or NanoKVM and enter the device's own address and web login. PiKVM uses HTTPS. NanoKVM accepts HTTPS or its stock HTTP address; enter `http://` explicitly for HTTP. Include a port when needed.
-3. **Connect.** Save the KVM to reconnect with one tap. If Android asks you to trust its certificate, confirm only if it is the device you intended to reach.
+3. **Connect.** Save the KVM to reconnect with one tap. On Android 17, allow **Nearby devices** so the app can reach KVMs on your local network. If Android asks you to trust its certificate, confirm only if it is the device you intended to reach.
 
 If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own address as a new **NanoKVM** entry. Remove the old entry after testing the direct connection.
 
@@ -37,6 +37,7 @@ If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own
 | Adjust video | Tap **⋮ → Video settings**. PiKVM settings stay limited to frame rate, JPEG quality, supported capture resolutions, and phone display. NanoKVM also offers H.264 or MJPEG, bitrate, and GOP. |
 | Type | Tap **⌨** for your Android keyboard. The extra key bar includes Ctrl, Alt, **WIN/⌘**, arrows, F1–F12, and Delete. Tap WIN/⌘ to open the host menu; hold it, then press another key for shortcuts. In the terminal, tap it as a Meta modifier. Hide the keyboard to enlarge the screen. |
 | Use a NanoKVM terminal | Tap **⋮ → NanoKVM terminal** for its shell, or **Serial terminal** to choose a port and speed. The terminal opens inside the console and uses the same extra keys above your Android keyboard. |
+| Manage NanoKVM scripts | Tap **⋮ → NanoKVM scripts** to upload, run, or delete `.sh` and `.py` scripts on the NanoKVM device. PiKVM has keyboard macros, which are a different feature. |
 | Configure NanoKVM | Tap **⋮ → NanoKVM settings** for its password, device, USB, Wi-Fi, DNS, and system controls. Open its full web interface there for other settings. **Security settings** manages the app's PIN and biometrics. |
 | Reconnect input hardware | Tap **⋮ → Reset HID**. |
 | Power on or shut down | Tap **⏻** in the console. These buttons follow the KVM's reported power state. |
@@ -53,7 +54,7 @@ Saved KVM passwords are encrypted on your phone. With the app lock enabled, Andr
 ## References
 
 - **PiKVM:** [HTTP API](https://docs.pikvm.org/api/) · [input WebSocket source](https://github.com/pikvm/kvmd/blob/master/kvmd/apps/kvmd/api/hid.py) · [video modes](https://docs.pikvm.org/video/) · [Wake-on-LAN](https://docs.pikvm.org/wol/)
-- **NanoKVM:** [server source](https://github.com/sipeed/NanoKVM) · [HID WebSocket](https://github.com/sipeed/NanoKVM/blob/main/server/service/ws/client.go) · [H.264 Direct source](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/desktop/screen/direct.worker.ts) · [WOL API source](https://github.com/sipeed/NanoKVM/blob/main/server/router/network.go)
+- **NanoKVM:** [server source](https://github.com/sipeed/NanoKVM) · [HID WebSocket](https://github.com/sipeed/NanoKVM/blob/main/server/service/ws/client.go) · [H.264 Direct source](https://github.com/sipeed/NanoKVM/blob/main/web/src/pages/desktop/screen/direct.worker.ts) · [scripts API source](https://github.com/sipeed/NanoKVM/blob/main/server/service/vm/script.go) · [WOL API source](https://github.com/sipeed/NanoKVM/blob/main/server/router/network.go)
 - **Android:** [Biometric Prompt guide](https://developer.android.com/identity/sign-in/biometric-auth)
 
 ## For developers
