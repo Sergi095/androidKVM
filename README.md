@@ -24,7 +24,7 @@ flowchart LR
 ## Get started
 
 1. **Install** the [signed release APK](https://github.com/Sergi095/androidKVM/releases/latest).
-2. **Add a KVM.** Select PiKVM or NanoKVM and enter the device's own address and web login. PiKVM uses HTTPS. NanoKVM accepts HTTPS or its stock HTTP address; enter `http://` explicitly for HTTP. Include a port when needed.
+2. **Add a KVM.** Select PiKVM or NanoKVM and enter the device's own address and web login. HTTPS is the default; enter `http://` explicitly for either device if needed. Include a port when needed.
 3. **Connect.** Save the KVM to reconnect with one tap. On Android 17, allow **Nearby devices** so the app can reach KVMs on your local network. If Android asks you to trust its certificate, confirm only if it is the device you intended to reach.
 
 If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own address as a new **NanoKVM** entry. Remove the old entry after testing the direct connection.
@@ -40,6 +40,7 @@ If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own
 | Manage NanoKVM scripts | Tap **⋮ → NanoKVM scripts** to upload, run, or delete `.sh` and `.py` scripts on the NanoKVM device. PiKVM has keyboard macros, which are a different feature. |
 | Configure NanoKVM | Tap **⋮ → NanoKVM settings** for its password, device, USB, Wi-Fi, DNS, and system controls. Open its full web interface there for other settings. **Security settings** manages the app's PIN and biometrics. |
 | Reconnect input hardware | Tap **⋮ → Reset HID**. |
+| Go back | From a KVM, swipe Back to return to your saved KVMs. Swipe Back again to leave the app; the app lock applies when enabled. |
 | Power on or shut down | Tap **⏻** in the console. These buttons follow the KVM's reported power state. |
 | Wake a sleeping PC | On its saved KVM card, open **WOL settings** and enter the **PC's wired MAC address**. Then tap **⏻ → Wake via WOL**. PiKVM also needs [WOL configured on the device](https://docs.pikvm.org/wol/). |
 | Lock the app | Tap **⋮ → Security settings**. Choose a 6–12 digit PIN, biometrics, or both. Both means **either** can unlock. The lock appears whenever you reopen the app. |
@@ -47,7 +48,7 @@ If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own
 
 **WOL over VPN:** The KVM sends the wake packet on its own network. Your phone only needs to reach the KVM; it does not need a VPN broadcast IP.
 
-NanoKVM's default HTTP connection sends login credentials without transport encryption. Enable HTTPS on the NanoKVM when using an untrusted network.
+HTTP sends login credentials without transport encryption. Use HTTPS when your KVM supports it, especially on untrusted networks.
 
 Saved KVM passwords are encrypted on your phone. With the app lock enabled, Android hides the app's recent-screen preview. Biometric-only mode also allows your Android screen lock as a fallback.
 
