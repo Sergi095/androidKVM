@@ -36,6 +36,8 @@ import android.view.ViewGroup;
 import android.view.ViewConfiguration;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -149,6 +151,7 @@ public final class MainActivity extends FragmentActivity {
     private EditText lockPinInput;
     private TextView lockStatus;
     private boolean locked, foreground, promptBusy, pinCheckBusy, pendingBiometricUnlock;
+    private OnBackInvokedCallback keyboardAwareBack;
     private boolean enablingBiometrics;
     private RemoteScreen screen;
     private FrameLayout videoArea;
@@ -187,6 +190,11 @@ public final class MainActivity extends FragmentActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { handleBackNavigation(); }
         });
+        if (Build.VERSION.SDK_INT >= 33) {
+            keyboardAwareBack = this::handleBackNavigation;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_OVERLAY, keyboardAwareBack);
+        }
         biometricPrompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
                 new BiometricPrompt.AuthenticationCallback() {
                     @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
@@ -274,6 +282,8 @@ public final class MainActivity extends FragmentActivity {
     }
 
     @Override public void onDestroy() {
+        if (Build.VERSION.SDK_INT >= 33 && keyboardAwareBack != null)
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(keyboardAwareBack);
         handler.removeCallbacks(powerPoll);
         closeNanoTerminal(false);
         stopVideo();
@@ -287,19 +297,20 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void handleBackNavigation() {
-        if (hideVisibleKeyboard()) return;
         for (int index = openDialogs.size() - 1; index >= 0; index--) {
             AlertDialog dialog = openDialogs.get(index);
             if (dialog.isShowing()) { dialog.dismiss(); return; }
         }
-        if (terminalPanel != null) { closeNanoTerminal(true); return; }
         if (locked) { moveTaskToBack(true); return; }
         if (client != null) { logout(); return; }
-        if (updatesHome.getVisibility() == View.VISIBLE) { showHomeTab(false); return; }
-        if (loginPanel.getVisibility() == View.VISIBLE && !profileStore.list().isEmpty()) {
+        if (updatesHome.getVisibility() == View.VISIBLE ||
+                (loginPanel.getVisibility() == View.VISIBLE && !profileStore.list().isEmpty())) {
+            hideVisibleKeyboard();
+            showHomeTab(false);
             closeAddKvmForm();
             return;
         }
+        hideVisibleKeyboard();
         if (securityStore.enabled()) displayLockPage();
         moveTaskToBack(true);
     }
@@ -1880,7 +1891,7 @@ public final class MainActivity extends FragmentActivity {
         rememberInput.setTextColor(TEXT);
         rememberInput.setChecked(true);
         loginPanel.addView(rememberInput, spaced());
-        loginPanel.addView(text("NanoKVM uses its own address. For HTTP-only NanoKVMs, enter http:// explicitly; HTTP sends credentials without encryption. For PiKVM 2FA, use a fresh code.", 12, MUTED), spaced());
+        loginPanel.addView(text("HTTPS is the default for both KVM types. Enter http:// explicitly if your device only supports HTTP; it sends credentials without encryption. For PiKVM 2FA, use a fresh code.", 12, MUTED), spaced());
         loginButton = button("Connect", ACCENT, BG);
         loginButton.setOnClickListener(view -> login());
         loginPanel.addView(loginButton, spaced());
@@ -3169,6 +3180,7 @@ public final class MainActivity extends FragmentActivity {
 
     private void logout() {
         PikvmClient old = client;
+        if (terminalPanel != null) closeNanoTerminal(false);
         pendingLocalNetworkLoginType = null;
         scriptPickClient = null;
         pendingScriptUri = null;
@@ -3188,6 +3200,8 @@ public final class MainActivity extends FragmentActivity {
         updateModifierButtons();
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(remoteInput.getWindowToken(), 0);
+        showHomeTab(false);
+        renderSavedProfiles();
         setContentView(loginPage);
         resumePage = loginPage;
         showMessage("Disconnected");

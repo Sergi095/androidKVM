@@ -10,7 +10,7 @@ Requires JDK 17 or newer and Android SDK platform 37.0. For a local test APK:
 
 For a source-built F-Droid candidate, run `./gradlew assembleFdroidRelease` without signing secrets. The unsigned APK is in `app/build/outputs/apk/fdroid/release/`. The F-Droid variant omits the GitHub APK updater and its install permission; F-Droid manages its updates. See [F-Droid preparation](FDROID.md).
 
-The GitHub debug APK is signed with a different key from releases, so it cannot update an installed release. Use a signed release APK for normal installation. The default KVM port is 443; add a different port to the address when needed.
+The GitHub debug APK is signed with a different key from releases, so it cannot update an installed release. Use a signed release APK for normal installation. An address without a scheme uses HTTPS and port 443; enter `http://` explicitly for HTTP and add a port when needed.
 
 ## Releases
 

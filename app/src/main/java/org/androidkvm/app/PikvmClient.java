@@ -74,7 +74,7 @@ class PikvmClient {
     private volatile boolean eventsReady;
     private Boolean directTextSupported;
     PikvmClient(String address, String fingerprint) throws Exception {
-        this(address, fingerprint, false);
+        this(address, fingerprint, true);
     }
 
     PikvmClient(String address, String fingerprint, boolean allowHttp) throws Exception {
@@ -151,13 +151,14 @@ class PikvmClient {
         return value.toString();
     }
 
-    private HttpsURLConnection connect(String path, String method, byte[] body, String contentType)
+    private HttpURLConnection connect(String path, String method, byte[] body, String contentType)
             throws IOException {
-        HttpsURLConnection connection = (HttpsURLConnection) new URL(baseUrl + path).openConnection();
-        if (pinned) {
-            connection.setSSLSocketFactory(pinnedFactory);
+        HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
+        if (pinned && connection instanceof HttpsURLConnection) {
+            HttpsURLConnection secure = (HttpsURLConnection) connection;
+            secure.setSSLSocketFactory(pinnedFactory);
             // An exact certificate pin authenticates the selected device even if its local cert lacks an IP SAN.
-            connection.setHostnameVerifier((host, session) -> true);
+            secure.setHostnameVerifier((host, session) -> true);
         }
         connection.setConnectTimeout(7000);
         connection.setReadTimeout(path.startsWith("/streamer/") ? 30000 : 12000);
@@ -179,7 +180,7 @@ class PikvmClient {
 
     private JSONObject request(String path, String method, byte[] body, String contentType)
             throws IOException, JSONException {
-        HttpsURLConnection connection = connect(path, method, body, contentType);
+        HttpURLConnection connection = connect(path, method, body, contentType);
         try {
             int status = connection.getResponseCode();
             InputStream stream = status < 400 ? connection.getInputStream() : connection.getErrorStream();
@@ -211,7 +212,7 @@ class PikvmClient {
     void login(String user, String password) throws IOException {
         byte[] form = ("user=" + encode(user) + "&passwd=" + encode(password))
                 .getBytes(StandardCharsets.UTF_8);
-        HttpsURLConnection connection = connect("/api/auth/login", "POST", form,
+        HttpURLConnection connection = connect("/api/auth/login", "POST", form,
                 "application/x-www-form-urlencoded; charset=utf-8");
         try {
             int status = connection.getResponseCode();
@@ -480,7 +481,7 @@ class PikvmClient {
     }
 
     HttpURLConnection openVideo() throws IOException {
-        HttpsURLConnection connection = connect("/streamer/stream", "GET", null, null);
+        HttpURLConnection connection = connect("/streamer/stream", "GET", null, null);
         connection.setRequestProperty("Accept", "multipart/x-mixed-replace");
         int status = connection.getResponseCode();
         if (status != 200) {
