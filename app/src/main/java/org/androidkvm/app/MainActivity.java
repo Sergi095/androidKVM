@@ -3,6 +3,7 @@ package org.androidkvm.app;
 import android.app.AlertDialog;
 import android.Manifest;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.content.Intent;
 import android.database.Cursor;
@@ -95,15 +96,8 @@ import javax.net.ssl.SSLPeerUnverifiedException;
 
 /** Minimal native Android console for PiKVM and NanoKVM devices. */
 public final class MainActivity extends FragmentActivity {
-    private static final int BG = Color.rgb(8, 16, 31);
-    private static final int CONSOLE_BG = Color.BLACK;
-    private static final int PANEL = Color.rgb(27, 39, 59);
-    private static final int SURFACE = Color.rgb(39, 54, 74);
-    private static final int TEXT = Color.rgb(245, 249, 251);
-    private static final int MUTED = Color.rgb(160, 178, 195);
-    private static final int ACCENT = Color.rgb(41, 197, 239);
-    private static final int KEY_ACCENT = Color.rgb(76, 205, 184);
-    private static final int DANGER = Color.rgb(182, 77, 82);
+    private int BG, CONSOLE_BG, PANEL, SURFACE, TEXT, MUTED, ACCENT, KEY_ACCENT, DANGER;
+    private boolean lightAppearance;
     private static final int SCRIPT_PICK_REQUEST = 4718;
     private static final int LOCAL_NETWORK_REQUEST = 4719;
     private static final int SCRIPT_MAX_BYTES = 1048576;
@@ -179,7 +173,20 @@ public final class MainActivity extends FragmentActivity {
     };
 
     @Override public void onCreate(Bundle state) {
+        String appearance = appearanceMode();
+        boolean systemDark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+        lightAppearance = "light".equals(appearance) || ("system".equals(appearance) && !systemDark);
+        setTheme(lightAppearance ? R.style.AppTheme_Light : R.style.AppTheme);
         super.onCreate(state);
+        loadAppearanceColors();
+        if (lightAppearance) {
+            View decor = getWindow().getDecorView();
+            int flags = decor.getSystemUiVisibility() | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= 27) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decor.setSystemUiVisibility(flags);
+            if (Build.VERSION.SDK_INT >= 29) decor.setForceDarkAllowed(false);
+        }
         profileStore = new ProfileStore(this);
         fillScreen = getSharedPreferences("video_preferences", MODE_PRIVATE).getBoolean("fill_screen", false);
         securityStore = new SecurityStore(this);
@@ -365,6 +372,12 @@ public final class MainActivity extends FragmentActivity {
                 });
             }
         }
+        String mode = appearanceMode();
+        String label = "light".equals(mode) ? "Light" : "system".equals(mode) ? "System" : "Dark";
+        menu.getMenu().add("Appearance · " + label).setOnMenuItemClickListener(item -> {
+            showAppearanceSettings();
+            return true;
+        });
         menu.getMenu().add("Security settings").setOnMenuItemClickListener(item -> {
             showSecuritySettings();
             return true;
@@ -377,6 +390,41 @@ public final class MainActivity extends FragmentActivity {
             });
         }
         menu.show();
+    }
+
+    private String appearanceMode() {
+        return getSharedPreferences("appearance", MODE_PRIVATE).getString("mode", "dark");
+    }
+
+    private void loadAppearanceColors() {
+        BG = getColor(lightAppearance ? R.color.app_light_background : R.color.app_background);
+        CONSOLE_BG = lightAppearance ? BG : Color.BLACK;
+        PANEL = getColor(lightAppearance ? R.color.app_light_panel : R.color.app_panel);
+        SURFACE = getColor(lightAppearance ? R.color.app_light_surface : R.color.app_surface);
+        TEXT = getColor(lightAppearance ? R.color.app_light_text : R.color.app_text);
+        MUTED = getColor(lightAppearance ? R.color.app_light_muted : R.color.app_muted);
+        ACCENT = getColor(lightAppearance ? R.color.app_light_accent : R.color.app_accent);
+        KEY_ACCENT = getColor(lightAppearance ? R.color.app_light_key_accent : R.color.app_key_accent);
+        DANGER = getColor(lightAppearance ? R.color.app_light_danger : R.color.app_danger);
+    }
+
+    private void showAppearanceSettings() {
+        if (locked) return;
+        String[] modes = {"system", "light", "dark"};
+        String[] labels = {"System default", "Light", "Dark"};
+        String current = appearanceMode();
+        int selected = "system".equals(current) ? 0 : "light".equals(current) ? 1 : 2;
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle("Appearance")
+                .setSingleChoiceItems(labels, selected, (dialog, which) -> {
+                    dialog.dismiss();
+                    if (modes[which].equals(current)) return;
+                    getSharedPreferences("appearance", MODE_PRIVATE).edit().putString("mode", modes[which]).apply();
+                    if (client != null) logout();
+                    recreate();
+                })
+                .setNegativeButton("Cancel", null);
+        if (client != null) builder.setMessage("Changing appearance returns to your KVMs.");
+        showTrackedDialog(builder.create());
     }
 
     private void confirmHidReset() {
@@ -2737,7 +2785,7 @@ public final class MainActivity extends FragmentActivity {
             button.setText(tag[0]);
             if (active) button.setBackground(rounded(KEY_ACCENT));
             else button.setBackgroundColor(CONSOLE_BG);
-            button.setTextColor(active ? Color.rgb(16, 24, 40) : TEXT);
+            button.setTextColor(active ? (lightAppearance ? Color.WHITE : Color.rgb(16, 24, 40)) : TEXT);
         }
     }
 

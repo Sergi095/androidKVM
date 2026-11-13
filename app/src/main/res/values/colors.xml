@@ -5,4 +5,14 @@
     <color name="app_text">#F5F9FB</color>
     <color name="app_muted">#A0B2C3</color>
     <color name="app_accent">#29C5EF</color>
+    <color name="app_key_accent">#4CCDB8</color>
+    <color name="app_danger">#B64D52</color>
+    <color name="app_light_background">#F6F8FC</color>
+    <color name="app_light_panel">#E5EBF2</color>
+    <color name="app_light_surface">#D9E3ED</color>
+    <color name="app_light_text">#162235</color>
+    <color name="app_light_muted">#536578</color>
+    <color name="app_light_accent">#00698A</color>
+    <color name="app_light_key_accent">#007B68</color>
+    <color name="app_light_danger">#A63242</color>
 </resources>

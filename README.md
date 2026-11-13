@@ -40,6 +40,7 @@ If you previously used a PiKVM bridge profile for NanoKVM, add the NanoKVM's own
 | Manage NanoKVM scripts | Tap **⋮ → NanoKVM scripts** to upload, run, or delete `.sh` and `.py` scripts on the NanoKVM device. PiKVM has keyboard macros, which are a different feature. |
 | Configure NanoKVM | Tap **⋮ → NanoKVM settings** for its password, device, USB, Wi-Fi, DNS, and system controls. Open its full web interface there for other settings. **Security settings** manages the app's PIN and biometrics. |
 | Reconnect input hardware | Tap **⋮ → Reset HID**. |
+| Change appearance | Tap **⋮ → Appearance** and choose System, Light, or Dark. Dark remains the default for existing installs. |
 | Go back | From a KVM, swipe Back to return to your saved KVMs. Swipe Back again to leave the app; the app lock applies when enabled. |
 | Power on or shut down | Tap **⏻** in the console. These buttons follow the KVM's reported power state. |
 | Wake a sleeping PC | On its saved KVM card, open **WOL settings** and enter the **PC's wired MAC address**. Then tap **⏻ → Wake via WOL**. PiKVM also needs [WOL configured on the device](https://docs.pikvm.org/wol/). |

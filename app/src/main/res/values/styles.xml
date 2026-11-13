@@ -25,4 +25,31 @@
     <style name="AppPopupMenu" parent="android:style/Widget.Material.PopupMenu">
         <item name="android:popupBackground">@drawable/dialog_background</item>
     </style>
+
+    <style name="AppTheme.Light" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">@color/app_light_accent</item>
+        <item name="android:colorControlNormal">@color/app_light_muted</item>
+        <item name="android:colorControlActivated">@color/app_light_accent</item>
+        <item name="android:textColorPrimary">@color/app_light_text</item>
+        <item name="android:textColorSecondary">@color/app_light_muted</item>
+        <item name="android:windowBackground">@color/app_light_background</item>
+        <item name="android:statusBarColor">@color/app_light_background</item>
+        <item name="android:navigationBarColor">@color/app_light_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:alertDialogTheme">@style/AppDialogTheme.Light</item>
+        <item name="android:popupMenuStyle">@style/AppPopupMenu.Light</item>
+    </style>
+
+    <style name="AppDialogTheme.Light" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorAccent">@color/app_light_accent</item>
+        <item name="android:colorControlNormal">@color/app_light_muted</item>
+        <item name="android:colorControlActivated">@color/app_light_accent</item>
+        <item name="android:textColorPrimary">@color/app_light_text</item>
+        <item name="android:textColorSecondary">@color/app_light_muted</item>
+        <item name="android:windowBackground">@drawable/dialog_background_light</item>
+    </style>
+
+    <style name="AppPopupMenu.Light" parent="android:style/Widget.Material.Light.PopupMenu">
+        <item name="android:popupBackground">@drawable/dialog_background_light</item>
+    </style>
 </resources>
