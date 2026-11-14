@@ -131,6 +131,7 @@ public final class MainActivity extends FragmentActivity {
     private LinearLayout savedPanel;
     private LinearLayout kvmHome, updatesHome;
     private LinearLayout extraKeys;
+    private View firstKeysRow, secondKeysRow, compactFixedKeysRow, functionKeysRow;
     private EditText addressInput, userInput, passwordInput;
     private Button deviceTypeInput;
     private String selectedDeviceType = "";
@@ -242,6 +243,28 @@ public final class MainActivity extends FragmentActivity {
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putBoolean("enabling_biometrics", enablingBiometrics);
         super.onSaveInstanceState(state);
+    }
+
+    @Override public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        if (client != null && hasHardwareKeyboard(configuration)) {
+            View focused = getCurrentFocus();
+            InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (focused != null && keyboard != null)
+                keyboard.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+        }
+        handler.post(() -> {
+            updateLoginKeyboardInset();
+            updateConsoleKeyboardInset();
+            if (screen != null) { screen.resetGesture(); screen.invalidate(); }
+            updateFastVideoTransform();
+        });
+    }
+
+    private boolean hasHardwareKeyboard(Configuration configuration) {
+        return configuration.keyboard != Configuration.KEYBOARD_NOKEYS
+                && configuration.keyboard != Configuration.KEYBOARD_UNDEFINED
+                && configuration.hardKeyboardHidden != Configuration.HARDKEYBOARDHIDDEN_YES;
     }
 
     @Override public void onStart() {
@@ -2053,9 +2076,15 @@ public final class MainActivity extends FragmentActivity {
 
         extraKeys = column();
         extraKeys.setBackgroundColor(CONSOLE_BG);
-        extraKeys.addView(compactKeyRow(ExtraKeyLayout.FIRST));
-        extraKeys.addView(compactKeyRow(ExtraKeyLayout.SECOND));
-        extraKeys.addView(keyRow(ExtraKeyLayout.FUNCTIONS));
+        firstKeysRow = compactKeyRow(ExtraKeyLayout.FIRST);
+        secondKeysRow = compactKeyRow(ExtraKeyLayout.SECOND);
+        compactFixedKeysRow = keyRow(ExtraKeyLayout.COMPACT_FIXED);
+        compactFixedKeysRow.setVisibility(View.GONE);
+        functionKeysRow = keyRow(ExtraKeyLayout.FUNCTIONS);
+        extraKeys.addView(firstKeysRow);
+        extraKeys.addView(secondKeysRow);
+        extraKeys.addView(compactFixedKeysRow);
+        extraKeys.addView(functionKeysRow);
         consolePage.addView(extraKeys);
 
     }
@@ -2139,8 +2168,18 @@ public final class MainActivity extends FragmentActivity {
         consolePage.getWindowVisibleDisplayFrame(visible);
         WindowInsets insets = consolePage.getRootWindowInsets();
         boolean keyboardShown = isConsoleKeyboardShown(insets, visible);
-        if (extraKeys != null && extraKeys.getVisibility() != (keyboardShown ? View.VISIBLE : View.GONE))
-            extraKeys.setVisibility(keyboardShown ? View.VISIBLE : View.GONE);
+        boolean showExtraKeys = keyboardShown || hasHardwareKeyboard(getResources().getConfiguration());
+        if (extraKeys != null) {
+            int width = Math.min(consolePage.getWidth(), dp(784));
+            LinearLayout.LayoutParams keysLayout = (LinearLayout.LayoutParams) extraKeys.getLayoutParams();
+            if (width > 0 && (keysLayout.width != width || keysLayout.gravity != Gravity.CENTER_HORIZONTAL)) {
+                keysLayout.width = width;
+                keysLayout.gravity = Gravity.CENTER_HORIZONTAL;
+                extraKeys.setLayoutParams(keysLayout);
+            }
+            if (extraKeys.getVisibility() != (showExtraKeys ? View.VISIBLE : View.GONE))
+                extraKeys.setVisibility(showExtraKeys ? View.VISIBLE : View.GONE);
+        }
         int[] position = new int[2];
         consolePage.getLocationOnScreen(position);
         int contentBottom = position[1] + consolePage.getHeight();
@@ -2154,8 +2193,49 @@ public final class MainActivity extends FragmentActivity {
             }
         }
         int bottom = Math.max(consoleBottomInset, covered);
+        int usableHeight = Math.max(0, consolePage.getHeight() - consoleTopInset - bottom);
+        boolean compact = usableHeight < dp(130);
+        boolean hideStatus = usableHeight < dp(193);
+        if (terminalPanel == null && videoStatus.getVisibility() != (hideStatus ? View.GONE : View.VISIBLE))
+            videoStatus.setVisibility(hideStatus ? View.GONE : View.VISIBLE);
+        if (firstKeysRow.getVisibility() != (compact ? View.GONE : View.VISIBLE)) {
+            firstKeysRow.setVisibility(compact ? View.GONE : View.VISIBLE);
+            secondKeysRow.setVisibility(compact ? View.GONE : View.VISIBLE);
+            compactFixedKeysRow.setVisibility(compact ? View.VISIBLE : View.GONE);
+        }
+        int rows = compact ? 2 : 3;
+        int statusHeight = hideStatus || terminalPanel != null ? 0 : dp(18);
+        int rowHeight = Math.min(dp(43), Math.max(dp(24),
+                (usableHeight - dp(46) - statusHeight) / rows));
+        resizeExtraKeyRow(compact ? compactFixedKeysRow : firstKeysRow, rowHeight);
+        if (!compact) resizeExtraKeyRow(secondKeysRow, rowHeight);
+        resizeExtraKeyRow(functionKeysRow, rowHeight);
         if (consolePage.getPaddingTop() != consoleTopInset || consolePage.getPaddingBottom() != bottom) {
             consolePage.setPadding(0, consoleTopInset, 0, bottom);
+        }
+    }
+
+    private void resizeExtraKeyRow(View keyRow, int height) {
+        ViewGroup.LayoutParams outer = keyRow.getLayoutParams();
+        if (outer.height != height) {
+            outer.height = height;
+            keyRow.setLayoutParams(outer);
+        }
+        ViewGroup content = keyRow instanceof HorizontalScrollView
+                ? (ViewGroup) ((HorizontalScrollView) keyRow).getChildAt(0) : (ViewGroup) keyRow;
+        if (content != keyRow) {
+            ViewGroup.LayoutParams inner = content.getLayoutParams();
+            if (inner.height != height) {
+                inner.height = height;
+                content.setLayoutParams(inner);
+            }
+        }
+        for (int index = 0; index < content.getChildCount(); index++) {
+            View key = content.getChildAt(index);
+            ViewGroup.LayoutParams keyLayout = key.getLayoutParams();
+            if (keyLayout.height == height) continue;
+            keyLayout.height = height;
+            key.setLayoutParams(keyLayout);
         }
     }
 
@@ -2168,15 +2248,35 @@ public final class MainActivity extends FragmentActivity {
     private HorizontalScrollView keyRow(String[][] keys) {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setFillViewport(true);
         LinearLayout row = row();
+        int minimumWidth = dp(54);
+        row.setMinimumWidth(keys.length * minimumWidth);
         for (String[] item : keys) {
             String label = item[0], code = item[1];
             Button key = compactButton(label);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(54), dp(43));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(minimumWidth, dp(43));
             row.addView(key, params);
             bindKey(key, label, code);
         }
-        scroll.addView(row);
+        scroll.addView(row, new FrameLayout.LayoutParams(keys.length * minimumWidth, dp(43)));
+        final int[] lastWidth = {-1};
+        scroll.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            int width = right - left;
+            if (width <= 0 || width == lastWidth[0]) return;
+            lastWidth[0] = width;
+            boolean fits = width >= keys.length * minimumWidth;
+            FrameLayout.LayoutParams rowLayout = (FrameLayout.LayoutParams) row.getLayoutParams();
+            rowLayout.width = fits ? width : keys.length * minimumWidth;
+            row.setMinimumWidth(rowLayout.width);
+            row.setLayoutParams(rowLayout);
+            for (int index = 0; index < row.getChildCount(); index++) {
+                LinearLayout.LayoutParams keyLayout = (LinearLayout.LayoutParams) row.getChildAt(index).getLayoutParams();
+                keyLayout.width = fits ? 0 : minimumWidth;
+                keyLayout.weight = fits ? 1 : 0;
+                row.getChildAt(index).setLayoutParams(keyLayout);
+            }
+        });
         return scroll;
     }
 
@@ -2582,7 +2682,8 @@ public final class MainActivity extends FragmentActivity {
                     if (!locked) remoteInput.postDelayed(() -> {
                         remoteInput.requestFocus();
                         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-                        if (keyboard != null) keyboard.showSoftInput(remoteInput, InputMethodManager.SHOW_IMPLICIT);
+                        if (keyboard != null && !hasHardwareKeyboard(getResources().getConfiguration()))
+                            keyboard.showSoftInput(remoteInput, InputMethodManager.SHOW_IMPLICIT);
                     }, 150);
                 });
             } catch (Exception error) {
@@ -2790,10 +2891,20 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void sendKey(String code) {
+        sendKey(code, null);
+    }
+
+    private void sendKey(String code, KeyEvent hardwareEvent) {
         PikvmClient active = client;
         if (active == null) return;
         flushTextNow();
         List<String> held = consumeModifiers();
+        if (hardwareEvent != null) {
+            if (hardwareEvent.isCtrlPressed() && !held.contains("ControlLeft")) held.add("ControlLeft");
+            if (hardwareEvent.isAltPressed() && !held.contains("AltLeft")) held.add("AltLeft");
+            if (hardwareEvent.isMetaPressed() && !held.contains("MetaLeft")) held.add("MetaLeft");
+            if (hardwareEvent.isShiftPressed() && !held.contains("ShiftLeft")) held.add("ShiftLeft");
+        }
         if (terminalPanel != null) {
             terminalPanel.sendKey(code, held);
             return;
@@ -2866,6 +2977,45 @@ public final class MainActivity extends FragmentActivity {
             case '-': return "Minus";
             case '.': return "Period";
             case ',': return "Comma";
+            default: return null;
+        }
+    }
+
+    private static String hardwareKeyCode(int keyCode) {
+        if (keyCode >= KeyEvent.KEYCODE_A && keyCode <= KeyEvent.KEYCODE_Z)
+            return "Key" + (char) ('A' + keyCode - KeyEvent.KEYCODE_A);
+        if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9)
+            return "Digit" + (keyCode - KeyEvent.KEYCODE_0);
+        if (keyCode >= KeyEvent.KEYCODE_F1 && keyCode <= KeyEvent.KEYCODE_F12)
+            return "F" + (keyCode - KeyEvent.KEYCODE_F1 + 1);
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER: return "Enter";
+            case KeyEvent.KEYCODE_ESCAPE: return "Escape";
+            case KeyEvent.KEYCODE_DEL: return "Backspace";
+            case KeyEvent.KEYCODE_FORWARD_DEL: return "Delete";
+            case KeyEvent.KEYCODE_TAB: return "Tab";
+            case KeyEvent.KEYCODE_SPACE: return "Space";
+            case KeyEvent.KEYCODE_DPAD_LEFT: return "ArrowLeft";
+            case KeyEvent.KEYCODE_DPAD_RIGHT: return "ArrowRight";
+            case KeyEvent.KEYCODE_DPAD_UP: return "ArrowUp";
+            case KeyEvent.KEYCODE_DPAD_DOWN: return "ArrowDown";
+            case KeyEvent.KEYCODE_MOVE_HOME: return "Home";
+            case KeyEvent.KEYCODE_MOVE_END: return "End";
+            case KeyEvent.KEYCODE_PAGE_UP: return "PageUp";
+            case KeyEvent.KEYCODE_PAGE_DOWN: return "PageDown";
+            case KeyEvent.KEYCODE_INSERT: return "Insert";
+            case KeyEvent.KEYCODE_MINUS: return "Minus";
+            case KeyEvent.KEYCODE_EQUALS: return "Equal";
+            case KeyEvent.KEYCODE_LEFT_BRACKET: return "BracketLeft";
+            case KeyEvent.KEYCODE_RIGHT_BRACKET: return "BracketRight";
+            case KeyEvent.KEYCODE_BACKSLASH: return "Backslash";
+            case KeyEvent.KEYCODE_SEMICOLON: return "Semicolon";
+            case KeyEvent.KEYCODE_APOSTROPHE: return "Quote";
+            case KeyEvent.KEYCODE_GRAVE: return "Backquote";
+            case KeyEvent.KEYCODE_COMMA: return "Comma";
+            case KeyEvent.KEYCODE_PERIOD: return "Period";
+            case KeyEvent.KEYCODE_SLASH: return "Slash";
             default: return null;
         }
     }
@@ -2972,6 +3122,25 @@ public final class MainActivity extends FragmentActivity {
         }
 
         @Override public boolean onCheckIsTextEditor() { return true; }
+
+        @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+            if (client == null) return super.onKeyDown(keyCode, event);
+            String code = hardwareKeyCode(keyCode);
+            if (code == null) return super.onKeyDown(keyCode, event);
+            if (event.isCtrlPressed() || event.isAltPressed() || event.isMetaPressed()) {
+                sendKey(code, event);
+                return true;
+            }
+            int character = event.getUnicodeChar();
+            if (character > 0 && !Character.isISOControl(character))
+                sendRemoteText(new String(Character.toChars(character)));
+            else sendKey(code, event);
+            return true;
+        }
+
+        @Override public boolean onKeyUp(int keyCode, KeyEvent event) {
+            return (client != null && hardwareKeyCode(keyCode) != null) || super.onKeyUp(keyCode, event);
+        }
 
         @Override public InputConnection onCreateInputConnection(EditorInfo info) {
             info.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD

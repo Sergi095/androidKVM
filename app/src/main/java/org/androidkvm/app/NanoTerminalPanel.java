@@ -1,6 +1,7 @@
 package org.androidkvm.app;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
@@ -175,6 +176,10 @@ final class NanoTerminalPanel extends LinearLayout {
         if (stopped) return;
         terminal.requestFocus();
         terminal.evaluateJavascript("window.terminalFocus()", null);
+        Configuration configuration = getResources().getConfiguration();
+        if (configuration.keyboard != Configuration.KEYBOARD_NOKEYS
+                && configuration.keyboard != Configuration.KEYBOARD_UNDEFINED
+                && configuration.hardKeyboardHidden != Configuration.HARDKEYBOARDHIDDEN_YES) return;
         InputMethodManager input = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
         if (input != null) handler.postDelayed(() -> input.showSoftInput(terminal,
                 InputMethodManager.SHOW_IMPLICIT), 120);
