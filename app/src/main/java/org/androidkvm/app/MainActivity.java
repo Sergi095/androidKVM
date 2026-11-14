@@ -131,6 +131,7 @@ public final class MainActivity extends FragmentActivity {
     private LinearLayout savedPanel;
     private LinearLayout kvmHome, updatesHome;
     private LinearLayout extraKeys;
+    private View firstKeysRow, secondKeysRow, compactFixedKeysRow, functionKeysRow;
     private EditText addressInput, userInput, passwordInput;
     private Button deviceTypeInput;
     private String selectedDeviceType = "";
@@ -2075,9 +2076,15 @@ public final class MainActivity extends FragmentActivity {
 
         extraKeys = column();
         extraKeys.setBackgroundColor(CONSOLE_BG);
-        extraKeys.addView(compactKeyRow(ExtraKeyLayout.FIRST));
-        extraKeys.addView(compactKeyRow(ExtraKeyLayout.SECOND));
-        extraKeys.addView(keyRow(ExtraKeyLayout.FUNCTIONS));
+        firstKeysRow = compactKeyRow(ExtraKeyLayout.FIRST);
+        secondKeysRow = compactKeyRow(ExtraKeyLayout.SECOND);
+        compactFixedKeysRow = keyRow(ExtraKeyLayout.COMPACT_FIXED);
+        compactFixedKeysRow.setVisibility(View.GONE);
+        functionKeysRow = keyRow(ExtraKeyLayout.FUNCTIONS);
+        extraKeys.addView(firstKeysRow);
+        extraKeys.addView(secondKeysRow);
+        extraKeys.addView(compactFixedKeysRow);
+        extraKeys.addView(functionKeysRow);
         consolePage.addView(extraKeys);
 
     }
@@ -2186,8 +2193,49 @@ public final class MainActivity extends FragmentActivity {
             }
         }
         int bottom = Math.max(consoleBottomInset, covered);
+        int usableHeight = Math.max(0, consolePage.getHeight() - consoleTopInset - bottom);
+        boolean compact = usableHeight < dp(130);
+        boolean hideStatus = usableHeight < dp(193);
+        if (terminalPanel == null && videoStatus.getVisibility() != (hideStatus ? View.GONE : View.VISIBLE))
+            videoStatus.setVisibility(hideStatus ? View.GONE : View.VISIBLE);
+        if (firstKeysRow.getVisibility() != (compact ? View.GONE : View.VISIBLE)) {
+            firstKeysRow.setVisibility(compact ? View.GONE : View.VISIBLE);
+            secondKeysRow.setVisibility(compact ? View.GONE : View.VISIBLE);
+            compactFixedKeysRow.setVisibility(compact ? View.VISIBLE : View.GONE);
+        }
+        int rows = compact ? 2 : 3;
+        int statusHeight = hideStatus || terminalPanel != null ? 0 : dp(18);
+        int rowHeight = Math.min(dp(43), Math.max(dp(24),
+                (usableHeight - dp(46) - statusHeight) / rows));
+        resizeExtraKeyRow(compact ? compactFixedKeysRow : firstKeysRow, rowHeight);
+        if (!compact) resizeExtraKeyRow(secondKeysRow, rowHeight);
+        resizeExtraKeyRow(functionKeysRow, rowHeight);
         if (consolePage.getPaddingTop() != consoleTopInset || consolePage.getPaddingBottom() != bottom) {
             consolePage.setPadding(0, consoleTopInset, 0, bottom);
+        }
+    }
+
+    private void resizeExtraKeyRow(View keyRow, int height) {
+        ViewGroup.LayoutParams outer = keyRow.getLayoutParams();
+        if (outer.height != height) {
+            outer.height = height;
+            keyRow.setLayoutParams(outer);
+        }
+        ViewGroup content = keyRow instanceof HorizontalScrollView
+                ? (ViewGroup) ((HorizontalScrollView) keyRow).getChildAt(0) : (ViewGroup) keyRow;
+        if (content != keyRow) {
+            ViewGroup.LayoutParams inner = content.getLayoutParams();
+            if (inner.height != height) {
+                inner.height = height;
+                content.setLayoutParams(inner);
+            }
+        }
+        for (int index = 0; index < content.getChildCount(); index++) {
+            View key = content.getChildAt(index);
+            ViewGroup.LayoutParams keyLayout = key.getLayoutParams();
+            if (keyLayout.height == height) continue;
+            keyLayout.height = height;
+            key.setLayoutParams(keyLayout);
         }
     }
 

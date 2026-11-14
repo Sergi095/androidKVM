@@ -11,6 +11,14 @@ final class ExtraKeyLayout {
             {"←", "ArrowLeft"}, {"↓", "ArrowDown"}, {"→", "ArrowRight"}, {"PGDN", "PageDown"}
     };
     static final String[][] FUNCTIONS = functionKeys();
+    static final String[][] COMPACT_FIXED = compactFixedKeys();
+
+    private static String[][] compactFixedKeys() {
+        String[][] keys = new String[FIRST.length + SECOND.length][];
+        System.arraycopy(FIRST, 0, keys, 0, FIRST.length);
+        System.arraycopy(SECOND, 0, keys, FIRST.length, SECOND.length);
+        return keys;
+    }
 
     private static String[][] functionKeys() {
         String[][] keys = new String[14][2];
