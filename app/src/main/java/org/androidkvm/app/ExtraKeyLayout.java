@@ -21,15 +21,17 @@ final class ExtraKeyLayout {
     }
 
     private static String[][] functionKeys() {
-        String[][] keys = new String[14][2];
+        String[][] keys = new String[15][2];
         keys[0][0] = "WIN/⌘";
         keys[0][1] = "MetaLeft";
         for (int number = 1; number <= 12; number++) {
             keys[number][0] = "F" + number;
             keys[number][1] = "F" + number;
         }
-        keys[13][0] = "DEL";
-        keys[13][1] = "Delete";
+        keys[13][0] = "PRTSC";
+        keys[13][1] = "PrintScreen";
+        keys[14][0] = "DEL";
+        keys[14][1] = "Delete";
         return keys;
     }
 
