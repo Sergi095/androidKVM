@@ -215,7 +215,6 @@ public final class MainActivity extends FragmentActivity {
                             enablingBiometrics = false;
                             try {
                                 securityStore.setBiometrics(true);
-                                refreshSecureFlag();
                                 showSecuritySettings();
                             } catch (Exception error) {
                                 Toast.makeText(MainActivity.this, error.getMessage(), Toast.LENGTH_LONG).show();
@@ -236,7 +235,6 @@ public final class MainActivity extends FragmentActivity {
                     }
                 });
         if (state != null) enablingBiometrics = state.getBoolean("enabling_biometrics", false);
-        refreshSecureFlag();
         if (securityStore.enabled()) displayLockPage();
     }
 
@@ -1585,14 +1583,6 @@ public final class MainActivity extends FragmentActivity {
         dialog.show();
     }
 
-    private void refreshSecureFlag() {
-        if (securityStore.enabled()) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        } else {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        }
-    }
-
     private void displayLockPage() {
         locked = true;
         closeNanoTerminal(false);
@@ -1745,7 +1735,6 @@ public final class MainActivity extends FragmentActivity {
             if (bio) {
                 try {
                     securityStore.setBiometrics(false);
-                    refreshSecureFlag();
                     showSecuritySettings();
                 } catch (Exception error) {
                     Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
@@ -1789,7 +1778,6 @@ public final class MainActivity extends FragmentActivity {
                             return;
                         }
                         securityStore.setPin(value);
-                        refreshSecureFlag();
                         dialog.dismiss();
                         showSecuritySettings();
                     } catch (Exception error) {
@@ -1817,7 +1805,6 @@ public final class MainActivity extends FragmentActivity {
                             return;
                         }
                         securityStore.removePin();
-                        refreshSecureFlag();
                         dialog.dismiss();
                         showSecuritySettings();
                     } catch (Exception error) {
@@ -2250,7 +2237,7 @@ public final class MainActivity extends FragmentActivity {
         scroll.setHorizontalScrollBarEnabled(false);
         scroll.setFillViewport(true);
         LinearLayout row = row();
-        int minimumWidth = dp(54);
+        int minimumWidth = dp(keys == ExtraKeyLayout.FUNCTIONS ? 50 : 54);
         row.setMinimumWidth(keys.length * minimumWidth);
         for (String[] item : keys) {
             String label = item[0], code = item[1];
@@ -3005,6 +2992,7 @@ public final class MainActivity extends FragmentActivity {
             case KeyEvent.KEYCODE_PAGE_UP: return "PageUp";
             case KeyEvent.KEYCODE_PAGE_DOWN: return "PageDown";
             case KeyEvent.KEYCODE_INSERT: return "Insert";
+            case KeyEvent.KEYCODE_SYSRQ: return "PrintScreen";
             case KeyEvent.KEYCODE_MINUS: return "Minus";
             case KeyEvent.KEYCODE_EQUALS: return "Equal";
             case KeyEvent.KEYCODE_LEFT_BRACKET: return "BracketLeft";

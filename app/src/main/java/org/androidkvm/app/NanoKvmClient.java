@@ -494,6 +494,7 @@ final class NanoKvmClient extends PikvmClient {
             case "Comma": return 0x36;
             case "Period": return 0x37;
             case "Slash": return 0x38;
+            case "PrintScreen": return 0x46;
             case "Insert": return 0x49;
             case "Home": return 0x4A;
             case "PageUp": return 0x4B;
